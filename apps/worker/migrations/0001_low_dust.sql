@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `alpaca_secret_iv` text;

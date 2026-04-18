@@ -1,0 +1,36 @@
+name = "trading-grand-prix"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[observability]
+enabled = true
+
+[vars]
+APP_ORIGIN = "http://localhost:5180"
+ADMIN_DISPLAY_NAME = "Lekhaj"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "trading-grand-prix-db"
+database_id = "local-placeholder-replace-before-remote-deploy"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "local-placeholder-replace-before-remote-deploy"
+
+# Cron triggers are staged here but handlers no-op until Phase 3 wires them up.
+[triggers]
+crons = [
+  "15 13 * * 1-5",
+  "35 13 * * 1-5",
+  "30 15 * * 1-5",
+  "0 18 * * 1-5",
+  "45 19 * * 1-5",
+  "*/5 13-20 * * 1-5"
+]
+
+[dev]
+port = 8787

@@ -1,0 +1,23 @@
+{
+  "name": "trading-grand-prix",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev:worker": "pnpm --filter worker dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev": "concurrently -n worker,web -c magenta,cyan \"pnpm dev:worker\" \"pnpm dev:web\"",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter worker db:generate",
+    "db:migrate:local": "pnpm --filter worker db:migrate:local",
+    "db:studio": "pnpm --filter worker db:studio"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

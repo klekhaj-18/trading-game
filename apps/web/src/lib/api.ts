@@ -1,0 +1,212 @@
+import type { AuthStatusResponse, AuthUser, LoginInput, SignupInput } from "shared/auth";
+import type {
+  AlpacaKeysInput,
+  OperationalPlan,
+  PlaybookCurrentResponse,
+  PlaybookDraftInput,
+  PlanSummary,
+} from "shared/playbook";
+import type { CoachChatResponse, CoachMessage } from "shared/coach";
+import type {
+  FireTestRoutineInput,
+  HaikuDecision,
+  PlacedOrderSummary,
+  RoutineKind,
+  RoutineSlot,
+  RoutineStatus,
+  ValidationFailure,
+} from "shared/routine";
+import type { RaceStateResponse } from "shared/race";
+
+export interface PositionSummary {
+  symbol: string;
+  qty: number;
+  avgEntry: number;
+  current: number;
+  marketValue: number;
+  unrealizedPl: number;
+  unrealizedPlPct: number;
+  side: "long" | "short";
+}
+
+export interface EquityPoint {
+  t: number;
+  equity: number;
+  cash: number;
+  longMarketValue: number;
+}
+
+export interface RoutineRunSummary extends AdminTestRun {}
+
+export interface AdminTestRun {
+  id: string;
+  kind: RoutineKind;
+  scheduledSlot: RoutineSlot | null;
+  oneShotInstruction: string | null;
+  claudeModel: string | null;
+  claudeReasoning: string | null;
+  decisions: HaikuDecision[] | null;
+  validationFailures: ValidationFailure[];
+  orders: PlacedOrderSummary[];
+  status: RoutineStatus;
+  errorText: string | null;
+  tokens: {
+    input: number | null;
+    output: number | null;
+    cacheRead: number | null;
+    cacheWrite: number | null;
+  };
+  startedAt: number;
+  completedAt: number | null;
+}
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    ...init,
+  });
+  const text = await res.text();
+  const body = text ? (JSON.parse(text) as unknown) : null;
+  if (!res.ok) {
+    const b = body as { error?: string; message?: string } | null;
+    throw new ApiError(res.status, b?.error ?? "unknown", b?.message ?? b?.error ?? res.statusText);
+  }
+  return body as T;
+}
+
+export const api = {
+  authStatus: () => request<AuthStatusResponse>("/api/auth/status"),
+  signup: (input: SignupInput) =>
+    request<{ user: AuthUser }>("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  login: (input: LoginInput) =>
+    request<{ user: AuthUser }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  logout: () => request<{ ok: true }>("/api/auth/logout", { method: "POST" }),
+  me: () => request<{ user: AuthUser }>("/api/me"),
+
+  linkAlpaca: (input: AlpacaKeysInput) =>
+    request<{
+      accountId: string;
+      accountNumber: string;
+      status: string;
+      equity: string;
+      buyingPower: string;
+    }>("/api/alpaca/keys", { method: "POST", body: JSON.stringify(input) }),
+
+  playbookCurrent: () => request<PlaybookCurrentResponse>("/api/playbook/current"),
+
+  submitPlaybook: (input: PlaybookDraftInput) =>
+    request<{
+      playbookId: string;
+      plan: PlanSummary;
+      usage: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_input_tokens: number | null;
+        cache_creation_input_tokens: number | null;
+      };
+    }>("/api/playbook", { method: "POST", body: JSON.stringify(input) }),
+
+  approvePlan: (planId: string) =>
+    request<{ ok: true; approvedAt: number }>(`/api/playbook/plan/${planId}/approve`, {
+      method: "POST",
+    }),
+
+  rejectPlan: (planId: string, reason: string) =>
+    request<{ ok: true }>(`/api/playbook/plan/${planId}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+
+  coachChat: (messages: CoachMessage[]) =>
+    request<CoachChatResponse>("/api/coach/chat", {
+      method: "POST",
+      body: JSON.stringify({ messages }),
+    }),
+
+  fireTestRoutine: (input: FireTestRoutineInput) =>
+    request<{
+      runId: string;
+      status: RoutineStatus;
+      decisions: HaikuDecision[] | null;
+      validationFailures: ValidationFailure[];
+      orders: PlacedOrderSummary[];
+      reasoning: string | null;
+      errorText: string | null;
+      usage: { input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null };
+    }>("/api/admin/fire-test-routine", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  adminTestRuns: () => request<{ runs: AdminTestRun[] }>("/api/admin/test-runs"),
+
+  resetAdminTestData: () =>
+    request<{ ok: true }>("/api/admin/reset-admin-test-data", { method: "POST" }),
+
+  mePositions: () => request<{ positions: PositionSummary[]; error?: string }>("/api/me/positions"),
+
+  meRoutineRuns: () => request<{ runs: RoutineRunSummary[] }>("/api/me/routine-runs"),
+
+  meEquitySeries: (range: "24h" | "7d" | "30d") =>
+    request<{ range: string; points: EquityPoint[] }>(`/api/me/equity-series?range=${range}`),
+
+  raceState: () => request<RaceStateResponse>("/api/race"),
+
+  adminSetDates: (startAt: string, endAt: string) =>
+    request<{ ok: true }>("/api/race/admin/set-dates", {
+      method: "POST",
+      body: JSON.stringify({ startAt, endAt }),
+    }),
+
+  adminLockDates: () =>
+    request<{ ok: true }>("/api/race/admin/lock-dates", { method: "POST" }),
+
+  adminExtendEnd: (newEndAt: string) =>
+    request<{ ok: true }>("/api/race/admin/extend-end", {
+      method: "POST",
+      body: JSON.stringify({ newEndAt }),
+    }),
+
+  adminUnlockForTesting: () =>
+    request<{ ok: true }>("/api/race/admin/unlock-for-testing", { method: "POST" }),
+
+  adminTestOrder: (input: {
+    symbol: string;
+    qty: number;
+    side: "buy" | "sell";
+    type: "market" | "limit";
+    limit_price?: number;
+    time_in_force: "day" | "gtc";
+  }) =>
+    request<{
+      ok: boolean;
+      order: {
+        id: string;
+        symbol: string;
+        side: string;
+        qty: string;
+        status: string;
+        limit_price: string | null;
+        submitted_at: string;
+      };
+    }>("/api/admin/test-order", { method: "POST", body: JSON.stringify(input) }),
+};
+
+export type { OperationalPlan };

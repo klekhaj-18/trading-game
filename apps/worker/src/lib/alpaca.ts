@@ -1,0 +1,201 @@
+const PAPER_BASE = "https://paper-api.alpaca.markets";
+const DATA_BASE = "https://data.alpaca.markets";
+
+export interface AlpacaAccount {
+  id: string;
+  account_number: string;
+  status: string;
+  cash: string;
+  equity: string;
+  buying_power: string;
+  long_market_value: string;
+  pattern_day_trader: boolean;
+}
+
+export interface AlpacaPosition {
+  symbol: string;
+  qty: string;
+  avg_entry_price: string;
+  current_price: string;
+  market_value: string;
+  unrealized_pl: string;
+  unrealized_plpc: string;
+  side: "long" | "short";
+}
+
+export interface AlpacaClock {
+  timestamp: string;
+  is_open: boolean;
+  next_open: string;
+  next_close: string;
+}
+
+export interface AlpacaOrder {
+  id: string;
+  client_order_id: string;
+  symbol: string;
+  side: "buy" | "sell";
+  qty: string;
+  filled_qty: string;
+  filled_avg_price: string | null;
+  status: string;
+  order_type: string;
+  limit_price: string | null;
+  time_in_force: string;
+  submitted_at: string;
+  filled_at: string | null;
+}
+
+export interface AlpacaBar {
+  t: string;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+  n?: number;
+  vw?: number;
+}
+
+export class AlpacaAuthError extends Error {
+  constructor(public readonly status: number) {
+    super(`Alpaca rejected credentials (status ${status})`);
+  }
+}
+
+export interface AlpacaCreds {
+  apiKey: string;
+  apiSecret: string;
+}
+
+function authHeaders(c: AlpacaCreds): Record<string, string> {
+  return {
+    "APCA-API-KEY-ID": c.apiKey,
+    "APCA-API-SECRET-KEY": c.apiSecret,
+    "Content-Type": "application/json",
+  };
+}
+
+async function alpacaFetch<T>(url: string, creds: AlpacaCreds, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { ...init, headers: { ...authHeaders(creds), ...(init?.headers ?? {}) } });
+  if (res.status === 401 || res.status === 403) throw new AlpacaAuthError(res.status);
+  if (!res.ok) throw new Error(`Alpaca ${url} failed: ${res.status} ${await res.text()}`);
+  return (await res.json()) as T;
+}
+
+export async function fetchAccount(apiKey: string, apiSecret: string): Promise<AlpacaAccount> {
+  return alpacaFetch<AlpacaAccount>(`${PAPER_BASE}/v2/account`, { apiKey, apiSecret });
+}
+
+export async function fetchPositions(creds: AlpacaCreds): Promise<AlpacaPosition[]> {
+  return alpacaFetch<AlpacaPosition[]>(`${PAPER_BASE}/v2/positions`, creds);
+}
+
+export async function fetchClock(creds: AlpacaCreds): Promise<AlpacaClock> {
+  return alpacaFetch<AlpacaClock>(`${PAPER_BASE}/v2/clock`, creds);
+}
+
+export interface PlaceOrderInput {
+  symbol: string;
+  qty: number;
+  side: "buy" | "sell";
+  type: "market" | "limit";
+  time_in_force: "day" | "gtc";
+  limit_price?: number;
+  client_order_id?: string;
+}
+
+export async function placeOrder(creds: AlpacaCreds, input: PlaceOrderInput): Promise<AlpacaOrder> {
+  const body: Record<string, unknown> = {
+    symbol: input.symbol,
+    qty: input.qty.toString(),
+    side: input.side,
+    type: input.type,
+    time_in_force: input.time_in_force,
+  };
+  if (input.type === "limit" && input.limit_price != null) body.limit_price = input.limit_price.toString();
+  if (input.client_order_id) body.client_order_id = input.client_order_id;
+  return alpacaFetch<AlpacaOrder>(`${PAPER_BASE}/v2/orders`, creds, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function fetchOrder(creds: AlpacaCreds, orderId: string): Promise<AlpacaOrder> {
+  return alpacaFetch<AlpacaOrder>(`${PAPER_BASE}/v2/orders/${orderId}`, creds);
+}
+
+export async function fetchOpenOrders(creds: AlpacaCreds): Promise<AlpacaOrder[]> {
+  return alpacaFetch<AlpacaOrder[]>(
+    `${PAPER_BASE}/v2/orders?status=open&limit=50&direction=desc`,
+    creds,
+  );
+}
+
+export async function fetchClosedOrders(creds: AlpacaCreds, limit = 10): Promise<AlpacaOrder[]> {
+  return alpacaFetch<AlpacaOrder[]>(
+    `${PAPER_BASE}/v2/orders?status=closed&limit=${limit}&direction=desc`,
+    creds,
+  );
+}
+
+export async function fetchDailyBars(
+  creds: AlpacaCreds,
+  symbols: string[],
+  days: number,
+): Promise<Record<string, AlpacaBar[]>> {
+  if (symbols.length === 0) return {};
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  const params = new URLSearchParams({
+    symbols: symbols.join(","),
+    timeframe: "1Day",
+    start: start.toISOString(),
+    end: end.toISOString(),
+    feed: "iex",
+    adjustment: "raw",
+    limit: String(days * symbols.length * 2),
+  });
+  const data = await alpacaFetch<{ bars: Record<string, AlpacaBar[]> }>(
+    `${DATA_BASE}/v2/stocks/bars?${params.toString()}`,
+    creds,
+  );
+  return data.bars ?? {};
+}
+
+export async function fetchLatestQuotes(
+  creds: AlpacaCreds,
+  symbols: string[],
+): Promise<Record<string, { bid: number; ask: number; last: number }>> {
+  if (symbols.length === 0) return {};
+  const params = new URLSearchParams({ symbols: symbols.join(","), feed: "iex" });
+  const data = await alpacaFetch<{
+    quotes: Record<string, { bp: number; ap: number }>;
+  }>(`${DATA_BASE}/v2/stocks/quotes/latest?${params.toString()}`, creds);
+  const out: Record<string, { bid: number; ask: number; last: number }> = {};
+  for (const [sym, q] of Object.entries(data.quotes ?? {})) {
+    out[sym] = { bid: q.bp, ask: q.ap, last: (q.bp + q.ap) / 2 };
+  }
+  return out;
+}
+
+interface AlpacaAsset {
+  symbol: string;
+  tradable: boolean;
+  status: string;
+  exchange: string;
+  class: string;
+}
+
+export async function fetchTradableSymbols(creds: AlpacaCreds, kv: KVNamespace): Promise<Set<string>> {
+  const cacheKey = "alpaca:tradable_symbols:v1";
+  const cached = await kv.get(cacheKey);
+  if (cached) return new Set(JSON.parse(cached) as string[]);
+  const assets = await alpacaFetch<AlpacaAsset[]>(
+    `${PAPER_BASE}/v2/assets?status=active&asset_class=us_equity`,
+    creds,
+  );
+  const tradable = assets.filter((a) => a.tradable).map((a) => a.symbol);
+  await kv.put(cacheKey, JSON.stringify(tradable), { expirationTtl: 60 * 60 * 24 });
+  return new Set(tradable);
+}
