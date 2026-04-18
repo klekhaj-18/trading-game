@@ -17,6 +17,25 @@ import type {
   ValidationFailure,
 } from "shared/routine";
 import type { RaceStateResponse } from "shared/race";
+import type {
+  LeaderboardEquitySeriesResponse,
+  LeaderboardRange,
+  LeaderboardResponse,
+  PublicTickerResponse,
+} from "shared/leaderboard";
+
+export interface OpenOrderSummary {
+  id: string;
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+  filledQty: number;
+  orderType: string;
+  limitPrice: number | null;
+  timeInForce: string;
+  status: string;
+  submittedAt: number;
+}
 
 export interface PositionSummary {
   symbol: string;
@@ -162,12 +181,41 @@ export const api = {
 
   mePositions: () => request<{ positions: PositionSummary[]; error?: string }>("/api/me/positions"),
 
+  meOpenOrders: () => request<{ orders: OpenOrderSummary[]; error?: string }>("/api/me/open-orders"),
+
+  meReplaceOrder: (
+    id: string,
+    input: { qty?: number; limit_price?: number; time_in_force?: "day" | "gtc" },
+  ) =>
+    request<{ ok: true; order: { id: string } }>(`/api/me/orders/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  meCancelOrder: (id: string) =>
+    request<{ ok: true }>(`/api/me/orders/${id}`, { method: "DELETE" }),
+
+  meClosePosition: (symbol: string) =>
+    request<{ ok: true }>(`/api/me/positions/${encodeURIComponent(symbol)}`, {
+      method: "DELETE",
+    }),
+
   meRoutineRuns: () => request<{ runs: RoutineRunSummary[] }>("/api/me/routine-runs"),
 
   meEquitySeries: (range: "24h" | "7d" | "30d") =>
     request<{ range: string; points: EquityPoint[] }>(`/api/me/equity-series?range=${range}`),
 
   raceState: () => request<RaceStateResponse>("/api/race"),
+
+  leaderboard: () => request<LeaderboardResponse>("/api/leaderboard"),
+
+  leaderboardEquitySeries: (range: LeaderboardRange) =>
+    request<LeaderboardEquitySeriesResponse>(
+      `/api/leaderboard/equity-series?range=${range}`,
+    ),
+
+  eventsTicker: (limit = 20) =>
+    request<PublicTickerResponse>(`/api/events/ticker?limit=${limit}`),
 
   adminSetDates: (startAt: string, endAt: string) =>
     request<{ ok: true }>("/api/race/admin/set-dates", {

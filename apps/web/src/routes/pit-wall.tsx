@@ -1,14 +1,19 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api, type EquityPoint, type RoutineRunSummary } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApiError, api, type EquityPoint, type OpenOrderSummary, type PositionSummary, type RoutineRunSummary } from "../lib/api";
 import { cn } from "../lib/utils";
 
 type Range = "24h" | "7d" | "30d";
 
 export function PitWallPage() {
   const [range, setRange] = useState<Range>("24h");
+  const qc = useQueryClient();
+  useEffect(() => {
+    qc.invalidateQueries({ queryKey: ["me"] });
+  }, [qc]);
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me });
   const posQ = useQuery({ queryKey: ["me", "positions"], queryFn: api.mePositions, refetchInterval: 30_000 });
+  const ordersQ = useQuery({ queryKey: ["me", "open-orders"], queryFn: api.meOpenOrders, refetchInterval: 30_000 });
   const equityQ = useQuery({
     queryKey: ["me", "equity", range],
     queryFn: () => api.meEquitySeries(range),
@@ -76,43 +81,14 @@ export function PitWallPage() {
 
       <div>
         <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase mb-3">Positions</div>
-        <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
-          {positions.length === 0 ? (
-            <div className="text-sm text-zinc-500 text-center py-8">No open positions.</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
-                <tr>
-                  <th className="text-left px-4 py-2">Symbol</th>
-                  <th className="text-right px-4 py-2">Qty</th>
-                  <th className="text-right px-4 py-2">Avg entry</th>
-                  <th className="text-right px-4 py-2">Current</th>
-                  <th className="text-right px-4 py-2">Market value</th>
-                  <th className="text-right px-4 py-2">Unrealized P&L</th>
-                </tr>
-              </thead>
-              <tbody className="tabular-digits">
-                {positions.map((p) => (
-                  <tr key={p.symbol} className="border-t border-zinc-900">
-                    <td className="px-4 py-2 font-bold">{p.symbol}</td>
-                    <td className="px-4 py-2 text-right">{p.qty}</td>
-                    <td className="px-4 py-2 text-right">${p.avgEntry.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-right">${p.current.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-right">${p.marketValue.toFixed(2)}</td>
-                    <td
-                      className={cn(
-                        "px-4 py-2 text-right",
-                        p.unrealizedPl > 0 ? "text-emerald-400" : p.unrealizedPl < 0 ? "text-red-400" : "text-zinc-400",
-                      )}
-                    >
-                      {fmtUsdSigned(p.unrealizedPl)} ({p.unrealizedPlPct.toFixed(2)}%)
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <PositionsTable positions={positions} />
+      </div>
+
+      <div>
+        <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase mb-3">
+          Open orders
         </div>
+        <OpenOrdersTable orders={ordersQ.data?.orders ?? []} />
       </div>
 
       <div>
@@ -122,6 +98,361 @@ export function PitWallPage() {
         <RoutineList runs={runsQ.data?.runs ?? []} />
       </div>
     </div>
+  );
+}
+
+function OpenOrdersTable({ orders }: { orders: OpenOrderSummary[] }) {
+  if (orders.length === 0) {
+    return (
+      <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] text-sm text-zinc-500 text-center py-8">
+        No open orders.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
+          <tr>
+            <th className="text-left px-4 py-2">Symbol</th>
+            <th className="text-left px-4 py-2">Side</th>
+            <th className="text-right px-4 py-2">Qty</th>
+            <th className="text-left px-4 py-2">Type</th>
+            <th className="text-right px-4 py-2">Limit</th>
+            <th className="text-left px-4 py-2">TIF</th>
+            <th className="text-left px-4 py-2">Status</th>
+            <th className="text-right px-4 py-2">Submitted</th>
+            <th className="text-right px-4 py-2">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="tabular-digits">
+          {orders.map((o) => (
+            <OpenOrderRow key={o.id} order={o} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OpenOrderRow({ order }: { order: OpenOrderSummary }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [qty, setQty] = useState<string>(String(order.qty));
+  const [limit, setLimit] = useState<string>(
+    order.limitPrice != null ? order.limitPrice.toFixed(2) : "",
+  );
+  const [tif, setTif] = useState<"day" | "gtc">(
+    order.timeInForce === "gtc" ? "gtc" : "day",
+  );
+  const [errText, setErrText] = useState<string | null>(null);
+
+  const ORDERS_KEY = ["me", "open-orders"] as const;
+
+  const removeLocallyById = (id: string) => {
+    qc.setQueryData<{ orders: OpenOrderSummary[] } | undefined>(ORDERS_KEY, (old) => {
+      if (!old) return old;
+      return { ...old, orders: old.orders.filter((o) => o.id !== id) };
+    });
+  };
+
+  const invalidateAll = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ORDERS_KEY }),
+      qc.invalidateQueries({ queryKey: ["me", "positions"] }),
+    ]);
+
+  const replaceM = useMutation({
+    mutationFn: (input: {
+      qty?: number;
+      limit_price?: number;
+      time_in_force?: "day" | "gtc";
+    }) => api.meReplaceOrder(order.id, input),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ORDERS_KEY });
+      const prev = qc.getQueryData<{ orders: OpenOrderSummary[] }>(ORDERS_KEY);
+      removeLocallyById(order.id);
+      return { prev };
+    },
+    onSuccess: () => {
+      setEditing(false);
+      setErrText(null);
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(ORDERS_KEY, ctx.prev);
+      setErrText(err instanceof ApiError ? err.message : "Replace failed");
+    },
+    onSettled: invalidateAll,
+  });
+
+  const cancelM = useMutation({
+    mutationFn: () => api.meCancelOrder(order.id),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ORDERS_KEY });
+      const prev = qc.getQueryData<{ orders: OpenOrderSummary[] }>(ORDERS_KEY);
+      removeLocallyById(order.id);
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(ORDERS_KEY, ctx.prev);
+      setErrText(err instanceof ApiError ? err.message : "Cancel failed");
+    },
+    onSettled: invalidateAll,
+  });
+
+  const startEdit = () => {
+    setQty(String(order.qty));
+    setLimit(order.limitPrice != null ? order.limitPrice.toFixed(2) : "");
+    setTif(order.timeInForce === "gtc" ? "gtc" : "day");
+    setErrText(null);
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    const body: { qty?: number; limit_price?: number; time_in_force?: "day" | "gtc" } = {};
+    const qNum = Number(qty);
+    const lNum = Number(limit);
+    if (Number.isFinite(qNum) && qNum > 0 && qNum !== order.qty) body.qty = qNum;
+    if (order.orderType === "limit" && Number.isFinite(lNum) && lNum > 0 && lNum !== order.limitPrice) {
+      body.limit_price = lNum;
+    }
+    if (tif !== order.timeInForce) body.time_in_force = tif;
+    if (Object.keys(body).length === 0) {
+      setEditing(false);
+      return;
+    }
+    replaceM.mutate(body);
+  };
+
+  const submitted = new Date(order.submittedAt * 1000);
+  const busy = replaceM.isPending || cancelM.isPending;
+
+  if (!editing) {
+    return (
+      <tr className="border-t border-zinc-900">
+        <td className="px-4 py-2 font-bold">{order.symbol}</td>
+        <td
+          className={cn(
+            "px-4 py-2 text-xs uppercase tracking-wider",
+            order.side === "buy" ? "text-emerald-400" : "text-red-400",
+          )}
+        >
+          {order.side}
+        </td>
+        <td className="px-4 py-2 text-right">
+          {order.filledQty > 0 ? `${order.filledQty}/${order.qty}` : order.qty}
+        </td>
+        <td className="px-4 py-2 text-xs uppercase tracking-wider text-zinc-400">
+          {order.orderType}
+        </td>
+        <td className="px-4 py-2 text-right">
+          {order.limitPrice != null ? `$${order.limitPrice.toFixed(2)}` : "—"}
+        </td>
+        <td className="px-4 py-2 text-xs uppercase tracking-wider text-zinc-500">
+          {order.timeInForce}
+        </td>
+        <td className="px-4 py-2 text-xs uppercase tracking-wider text-amber-300">
+          {order.status}
+        </td>
+        <td className="px-4 py-2 text-right text-xs text-zinc-500">
+          {submitted.toLocaleTimeString()}
+        </td>
+        <td className="px-4 py-2 text-right">
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={startEdit}
+              disabled={busy}
+              className="text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => {
+                if (confirm(`Cancel ${order.side} ${order.qty} ${order.symbol}?`)) {
+                  cancelM.mutate();
+                }
+              }}
+              disabled={busy}
+              className="text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-red-900/60 text-red-300 hover:bg-red-950/40 disabled:opacity-40"
+            >
+              {cancelM.isPending ? "…" : "Cancel"}
+            </button>
+          </div>
+          {errText && <div className="mt-1 text-[10px] text-red-400">{errText}</div>}
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr className="border-t border-zinc-900 bg-zinc-950/60">
+      <td className="px-4 py-2 font-bold">{order.symbol}</td>
+      <td
+        className={cn(
+          "px-4 py-2 text-xs uppercase tracking-wider",
+          order.side === "buy" ? "text-emerald-400" : "text-red-400",
+        )}
+      >
+        {order.side}
+      </td>
+      <td className="px-4 py-2 text-right">
+        <input
+          type="number"
+          step="1"
+          min="1"
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          className="w-16 rounded bg-black/60 border border-zinc-700 px-1.5 py-0.5 text-right tabular-digits text-xs"
+        />
+      </td>
+      <td className="px-4 py-2 text-xs uppercase tracking-wider text-zinc-400">
+        {order.orderType}
+      </td>
+      <td className="px-4 py-2 text-right">
+        {order.orderType === "limit" ? (
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            value={limit}
+            onChange={(e) => setLimit(e.target.value)}
+            className="w-20 rounded bg-black/60 border border-zinc-700 px-1.5 py-0.5 text-right tabular-digits text-xs"
+          />
+        ) : (
+          "—"
+        )}
+      </td>
+      <td className="px-4 py-2 text-xs">
+        <select
+          value={tif}
+          onChange={(e) => setTif(e.target.value as "day" | "gtc")}
+          className="rounded bg-black/60 border border-zinc-700 px-1 py-0.5 uppercase tracking-wider text-[10px]"
+        >
+          <option value="day">day</option>
+          <option value="gtc">gtc</option>
+        </select>
+      </td>
+      <td className="px-4 py-2 text-xs uppercase tracking-wider text-amber-300">
+        {order.status}
+      </td>
+      <td className="px-4 py-2 text-right text-xs text-zinc-500">
+        {submitted.toLocaleTimeString()}
+      </td>
+      <td className="px-4 py-2 text-right">
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={saveEdit}
+            disabled={busy}
+            className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-40"
+          >
+            {replaceM.isPending ? "…" : "Save"}
+          </button>
+          <button
+            onClick={() => {
+              setEditing(false);
+              setErrText(null);
+            }}
+            disabled={busy}
+            className="text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            Cancel
+          </button>
+        </div>
+        {errText && <div className="mt-1 text-[10px] text-red-400">{errText}</div>}
+      </td>
+    </tr>
+  );
+}
+
+function PositionsTable({ positions }: { positions: PositionSummary[] }) {
+  if (positions.length === 0) {
+    return (
+      <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] text-sm text-zinc-500 text-center py-8">
+        No open positions.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
+          <tr>
+            <th className="text-left px-4 py-2">Symbol</th>
+            <th className="text-right px-4 py-2">Qty</th>
+            <th className="text-right px-4 py-2">Avg entry</th>
+            <th className="text-right px-4 py-2">Current</th>
+            <th className="text-right px-4 py-2">Market value</th>
+            <th className="text-right px-4 py-2">Unrealized P&L</th>
+            <th className="text-right px-4 py-2">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="tabular-digits">
+          {positions.map((p) => (
+            <PositionRow key={p.symbol} position={p} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PositionRow({ position: p }: { position: PositionSummary }) {
+  const qc = useQueryClient();
+  const [errText, setErrText] = useState<string | null>(null);
+  const POS_KEY = ["me", "positions"] as const;
+  const closeM = useMutation({
+    mutationFn: () => api.meClosePosition(p.symbol),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: POS_KEY });
+      const prev = qc.getQueryData<{ positions: PositionSummary[] }>(POS_KEY);
+      qc.setQueryData<{ positions: PositionSummary[] } | undefined>(POS_KEY, (old) => {
+        if (!old) return old;
+        return { ...old, positions: old.positions.filter((x) => x.symbol !== p.symbol) };
+      });
+      return { prev };
+    },
+    onSuccess: () => setErrText(null),
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(POS_KEY, ctx.prev);
+      setErrText(err instanceof ApiError ? err.message : "Close failed");
+    },
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: POS_KEY }),
+        qc.invalidateQueries({ queryKey: ["me", "open-orders"] }),
+      ]),
+  });
+
+  return (
+    <tr className="border-t border-zinc-900">
+      <td className="px-4 py-2 font-bold">{p.symbol}</td>
+      <td className="px-4 py-2 text-right">{p.qty}</td>
+      <td className="px-4 py-2 text-right">${p.avgEntry.toFixed(2)}</td>
+      <td className="px-4 py-2 text-right">${p.current.toFixed(2)}</td>
+      <td className="px-4 py-2 text-right">${p.marketValue.toFixed(2)}</td>
+      <td
+        className={cn(
+          "px-4 py-2 text-right",
+          p.unrealizedPl > 0 ? "text-emerald-400" : p.unrealizedPl < 0 ? "text-red-400" : "text-zinc-400",
+        )}
+      >
+        {fmtUsdSigned(p.unrealizedPl)} ({p.unrealizedPlPct.toFixed(2)}%)
+      </td>
+      <td className="px-4 py-2 text-right">
+        <button
+          onClick={() => {
+            if (confirm(`Close full position: ${p.qty} ${p.symbol} at market?`)) {
+              closeM.mutate();
+            }
+          }}
+          disabled={closeM.isPending}
+          className="text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-red-900/60 text-red-300 hover:bg-red-950/40 disabled:opacity-40"
+        >
+          {closeM.isPending ? "…" : "Close"}
+        </button>
+        {errText && <div className="mt-1 text-[10px] text-red-400">{errText}</div>}
+      </td>
+    </tr>
   );
 }
 

@@ -36,6 +36,10 @@ export function AppShell() {
   const user = meQ.data?.user;
   if (!user) return <Navigate to="/login" replace />;
 
+  if (!pbQ.isFetched) {
+    return <div className="min-h-screen grid place-items-center text-zinc-600">· · ·</div>;
+  }
+
   const fullyOnboarded =
     !!pbQ.data && pbQ.data.alpacaLinked && pbQ.data.plan?.approvalState === "approved";
 
@@ -57,7 +61,15 @@ export function AppShell() {
           </Link>
 
           <nav className="flex items-center gap-1 text-xs">
-            <ShellLink to="/">Pit wall</ShellLink>
+            <ShellLink to="/">Leaderboard</ShellLink>
+            <ShellLink
+              to="/pit-wall"
+              onClick={() => {
+                qc.invalidateQueries({ queryKey: ["me"] });
+              }}
+            >
+              Pit wall
+            </ShellLink>
             <ShellLink to="/playbook">Strategy</ShellLink>
             {user.isAdmin && <ShellLink to="/paddock">Paddock</ShellLink>}
           </nav>
@@ -122,11 +134,20 @@ function RaceBanner() {
   );
 }
 
-function ShellLink({ to, children }: { to: string; children: React.ReactNode }) {
+function ShellLink({
+  to,
+  children,
+  onClick,
+}: {
+  to: string;
+  children: React.ReactNode;
+  onClick?: () => void;
+}) {
   return (
     <NavLink
       to={to}
       end
+      onClick={onClick}
       className={({ isActive }) =>
         cn(
           "rounded px-3 py-1.5 uppercase tracking-wider transition",

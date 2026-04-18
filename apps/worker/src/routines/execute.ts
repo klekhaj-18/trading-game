@@ -13,6 +13,7 @@ import { operationalPlans, routineRuns, trades, users } from "../db/schema";
 import { ulid } from "../lib/ids";
 import { open } from "../lib/crypto";
 import { AlpacaAuthError, fetchTradableSymbols, placeOrder, type AlpacaCreds } from "../lib/alpaca";
+import { invalidateUserAlpacaCaches } from "../lib/user-cache";
 import { runRoutineLlm } from "../claude/haiku";
 import { buildAccountContext, buildMarketSnapshot } from "../trading/snapshot";
 import { validateDecisions } from "../trading/validate";
@@ -201,6 +202,7 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
 
     const anyOrders = placed.length > 0;
     const anyFailures = validation.failures.length > 0;
+    if (anyOrders) await invalidateUserAlpacaCaches(env, input.userId);
     const status: RoutineStatus =
       anyOrders && anyFailures ? "partial" : anyFailures ? "validation_failed" : "succeeded";
 

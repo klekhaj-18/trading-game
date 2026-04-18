@@ -7,6 +7,8 @@ import { playbookRoutes } from "./routes/playbook";
 import { coachRoutes } from "./routes/coach";
 import { adminRoutes } from "./routes/admin";
 import { raceRoutes } from "./routes/race";
+import { leaderboardRoutes } from "./routes/leaderboard";
+import { eventsRoutes } from "./routes/events";
 import type { AppEnv } from "./middleware/session";
 
 const app = new Hono<AppEnv>();
@@ -25,6 +27,8 @@ app.route("/api/playbook", playbookRoutes);
 app.route("/api/coach", coachRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/api/race", raceRoutes);
+app.route("/api/leaderboard", leaderboardRoutes);
+app.route("/api/events", eventsRoutes);
 
 app.notFound((c) => c.json({ error: "not_found" }, 404));
 app.onError((err, c) => {

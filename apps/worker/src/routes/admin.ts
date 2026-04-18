@@ -10,6 +10,8 @@ import { captureEquitySnapshots, handleScheduled } from "../routines/cron";
 import { placeOrder, fetchOrder, type AlpacaCreds } from "../lib/alpaca";
 import { open } from "../lib/crypto";
 import { ulid } from "../lib/ids";
+import { clearDemoUsers, seedDemoUsers } from "../lib/demo-seed";
+import { invalidateUserAlpacaCaches } from "../lib/user-cache";
 import { requireSession, type AppEnv } from "../middleware/session";
 
 const testOrderSchema = z.object({
@@ -122,6 +124,7 @@ adminRoutes.post("/test-order", zValidator("json", testOrderSchema), async (c) =
       submittedAt: Math.floor(new Date(order.submitted_at).getTime() / 1000),
       filledAt: order.filled_at ? Math.floor(new Date(order.filled_at).getTime() / 1000) : null,
     });
+    await invalidateUserAlpacaCaches(c.env, user.id);
     return c.json({ ok: true, order });
   } catch (err) {
     console.error("test-order error", err);
@@ -130,6 +133,26 @@ adminRoutes.post("/test-order", zValidator("json", testOrderSchema), async (c) =
       502,
     );
   }
+});
+
+adminRoutes.post("/seed-demo-users", async (c) => {
+  const db = getDb(c.env.DB);
+  try {
+    const result = await seedDemoUsers(db);
+    return c.json(result);
+  } catch (err) {
+    console.error("seed-demo-users error", err);
+    return c.json(
+      { error: "seed_failed", message: err instanceof Error ? err.message : String(err) },
+      500,
+    );
+  }
+});
+
+adminRoutes.post("/clear-demo-users", async (c) => {
+  const db = getDb(c.env.DB);
+  const result = await clearDemoUsers(db);
+  return c.json(result);
 });
 
 adminRoutes.get("/test-order/:id", async (c) => {

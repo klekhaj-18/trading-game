@@ -11,7 +11,8 @@
     "./playbook": "./src/playbook.ts",
     "./coach": "./src/coach.ts",
     "./routine": "./src/routine.ts",
-    "./race": "./src/race.ts"
+    "./race": "./src/race.ts",
+    "./leaderboard": "./src/leaderboard.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

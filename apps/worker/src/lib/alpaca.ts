@@ -125,6 +125,92 @@ export async function fetchOrder(creds: AlpacaCreds, orderId: string): Promise<A
   return alpacaFetch<AlpacaOrder>(`${PAPER_BASE}/v2/orders/${orderId}`, creds);
 }
 
+export interface ReplaceOrderInput {
+  qty?: number;
+  limit_price?: number;
+  time_in_force?: "day" | "gtc";
+}
+
+export async function replaceOrder(
+  creds: AlpacaCreds,
+  orderId: string,
+  input: ReplaceOrderInput,
+): Promise<AlpacaOrder> {
+  const body: Record<string, unknown> = {};
+  if (input.qty != null) body.qty = input.qty.toString();
+  if (input.limit_price != null) body.limit_price = input.limit_price.toString();
+  if (input.time_in_force != null) body.time_in_force = input.time_in_force;
+  return alpacaFetch<AlpacaOrder>(`${PAPER_BASE}/v2/orders/${orderId}`, creds, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function cancelAndReplaceOrder(
+  creds: AlpacaCreds,
+  orderId: string,
+  input: ReplaceOrderInput,
+): Promise<AlpacaOrder> {
+  const existing = await fetchOrder(creds, orderId);
+  await cancelOrder(creds, orderId);
+  const type = (existing.order_type === "market" ? "market" : "limit") as "market" | "limit";
+  const tif: "day" | "gtc" =
+    input.time_in_force ?? (existing.time_in_force === "gtc" ? "gtc" : "day");
+  const existingLimit =
+    existing.limit_price != null && existing.limit_price !== ""
+      ? Number(existing.limit_price)
+      : undefined;
+  return placeOrder(creds, {
+    symbol: existing.symbol,
+    qty: input.qty ?? Number(existing.qty),
+    side: existing.side,
+    type,
+    time_in_force: tif,
+    limit_price: type === "limit" ? (input.limit_price ?? existingLimit) : undefined,
+  });
+}
+
+export async function cancelOrder(creds: AlpacaCreds, orderId: string): Promise<void> {
+  const res = await fetch(`${PAPER_BASE}/v2/orders/${orderId}`, {
+    method: "DELETE",
+    headers: authHeaders(creds),
+  });
+  if (res.status === 401 || res.status === 403) throw new AlpacaAuthError(res.status);
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`Alpaca cancel ${orderId} failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+export interface AlpacaClosePositionResult {
+  symbol: string;
+  status: number;
+  body: unknown;
+}
+
+export async function closePosition(
+  creds: AlpacaCreds,
+  symbol: string,
+): Promise<AlpacaClosePositionResult> {
+  const res = await fetch(`${PAPER_BASE}/v2/positions/${symbol}`, {
+    method: "DELETE",
+    headers: authHeaders(creds),
+  });
+  if (res.status === 401 || res.status === 403) throw new AlpacaAuthError(res.status);
+  const text = await res.text();
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Alpaca close position ${symbol} failed: ${res.status} ${typeof body === "string" ? body : JSON.stringify(body)}`,
+    );
+  }
+  return { symbol, status: res.status, body };
+}
+
 export async function fetchOpenOrders(creds: AlpacaCreds): Promise<AlpacaOrder[]> {
   return alpacaFetch<AlpacaOrder[]>(
     `${PAPER_BASE}/v2/orders?status=open&limit=50&direction=desc`,
