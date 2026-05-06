@@ -1,8 +1,67 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { CoachPlanRevision, CoachPlaybookRevision } from "shared/coach";
 import { api, ApiError } from "../lib/api";
 import { cn } from "../lib/utils";
+
+// Tiny inline-markdown renderer covering what the coach actually emits:
+// **bold**, `code`, *italic* (single asterisk), and bullet lines starting with "- ".
+// Whitespace + newlines are preserved by the wrapping element's whitespace-pre-wrap.
+const INLINE_TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)/g;
+
+function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  const parts = text.split(INLINE_TOKEN);
+  return parts.map((part, i) => {
+    const k = `${keyPrefix}-${i}`;
+    if (!part) return null;
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return <strong key={k} className="font-semibold text-zinc-50">{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      return (
+        <code key={k} className="rounded bg-zinc-800/80 px-1 py-0.5 text-[0.85em] text-zinc-100">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    if (part.startsWith("*") && part.endsWith("*") && part.length > 2 && !part.startsWith("**")) {
+      return <em key={k} className="italic">{part.slice(1, -1)}</em>;
+    }
+    return <Fragment key={k}>{part}</Fragment>;
+  });
+}
+
+function MarkdownLite({ text }: { text: string }) {
+  const lines = text.split("\n");
+  return (
+    <>
+      {lines.map((line, i) => {
+        const isLast = i === lines.length - 1;
+        const trimmed = line.trimStart();
+        const indent = line.length - trimmed.length;
+        // Bullet rendering: turns "- foo" into "• foo" with stable spacing.
+        if (/^[-*]\s+/.test(trimmed)) {
+          const body = trimmed.replace(/^[-*]\s+/, "");
+          return (
+            <Fragment key={i}>
+              <span style={{ paddingLeft: indent + "ch" }}>
+                <span className="text-zinc-500">• </span>
+                {renderInline(body, `b${i}`)}
+              </span>
+              {!isLast && "\n"}
+            </Fragment>
+          );
+        }
+        return (
+          <Fragment key={i}>
+            {renderInline(line, `l${i}`)}
+            {!isLast && "\n"}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
 
 interface ChatTurn {
   role: "user" | "assistant";
@@ -40,6 +99,13 @@ export function CoachChat({ onCommitDraft, storageKey = "tgp:coach" }: CoachChat
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [lookupStatus, setLookupStatus] = useState<{
+    status: "started" | "completed";
+    symbols: string[];
+    rationale?: string;
+    resolvedCount?: number;
+    failedSymbols?: string[];
+  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -126,6 +192,19 @@ export function CoachChat({ onCommitDraft, storageKey = "tgp:coach" }: CoachChat
             } catch {
               /* ignore malformed */
             }
+          } else if (evtName === "lookup") {
+            try {
+              const parsed = JSON.parse(evtData) as {
+                status: "started" | "completed";
+                symbols: string[];
+                rationale?: string;
+                resolvedCount?: number;
+                failedSymbols?: string[];
+              };
+              setLookupStatus(parsed);
+            } catch {
+              /* ignore malformed */
+            }
           } else if (evtName === "done") {
             try {
               finalDone = JSON.parse(evtData);
@@ -173,6 +252,7 @@ export function CoachChat({ onCommitDraft, storageKey = "tgp:coach" }: CoachChat
     } finally {
       setStreaming(false);
       setStreamingText("");
+      setLookupStatus(null);
       abortRef.current = null;
     }
   }
@@ -221,12 +301,34 @@ export function CoachChat({ onCommitDraft, storageKey = "tgp:coach" }: CoachChat
             planError={applyPlanM.error as ApiError | null}
           />
         ))}
+        {lookupStatus && (
+          <div className="flex justify-start">
+            <div className="max-w-[85%] rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
+              {lookupStatus.status === "started" ? (
+                <>
+                  <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse mr-2 align-middle" />
+                  Looking up <span className="font-mono text-amber-100">{lookupStatus.symbols.join(", ")}</span>
+                  {lookupStatus.rationale ? <span className="text-amber-300/80"> — {lookupStatus.rationale}</span> : null}
+                </>
+              ) : (
+                <>
+                  <span className="text-amber-300/80">✓</span>{" "}
+                  Fetched {lookupStatus.resolvedCount ?? lookupStatus.symbols.length} of {lookupStatus.symbols.length}{" "}
+                  symbol{lookupStatus.symbols.length !== 1 ? "s" : ""}
+                  {lookupStatus.failedSymbols && lookupStatus.failedSymbols.length > 0 ? (
+                    <span className="text-red-300/80"> (failed: {lookupStatus.failedSymbols.join(", ")})</span>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+        )}
         {streaming && (
           <div className="flex justify-start">
             <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap bg-black/40 border border-zinc-800 text-zinc-200">
               {streamingText.length > 0 ? (
                 <>
-                  {streamingText}
+                  <MarkdownLite text={streamingText} />
                   <span className="inline-block w-1 h-4 ml-0.5 bg-zinc-400 animate-pulse align-text-bottom" />
                 </>
               ) : (
@@ -310,7 +412,7 @@ function TurnView({
                 : "bg-black/40 border border-zinc-800 text-zinc-200",
             )}
           >
-            {turn.content}
+            {turn.role === "assistant" ? <MarkdownLite text={turn.content} /> : turn.content}
           </div>
         </div>
       )}

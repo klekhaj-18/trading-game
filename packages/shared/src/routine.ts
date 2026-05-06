@@ -3,6 +3,15 @@ import { z } from "zod";
 export const ROUTINE_SLOTS = ["premarket", "open", "midmorning", "afternoon", "close"] as const;
 export type RoutineSlot = (typeof ROUTINE_SLOTS)[number];
 
+/**
+ * A scheduled touchpoint persisted on routineRuns.scheduledSlot.
+ * Includes the executable trading slots plus "warm" — the pre-premarket factor
+ * refresh that prepares KV data for the 09:15 routine. "warm" never invokes
+ * the LLM or places orders; it only logs a per-player Radio entry.
+ */
+export const SCHEDULED_TOUCHPOINTS = [...ROUTINE_SLOTS, "warm"] as const;
+export type ScheduledTouchpoint = (typeof SCHEDULED_TOUCHPOINTS)[number];
+
 export const ROUTINE_KINDS = ["scheduled", "on_demand", "admin_test"] as const;
 export type RoutineKind = (typeof ROUTINE_KINDS)[number];
 
@@ -47,7 +56,7 @@ export interface HaikuDecisionsOutput {
 export interface RoutineRunSummary {
   id: string;
   kind: RoutineKind;
-  scheduledSlot: RoutineSlot | null;
+  scheduledSlot: ScheduledTouchpoint | null;
   oneShotInstruction: string | null;
   claudeModel: string | null;
   claudeReasoning: string | null;

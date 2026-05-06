@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { fireTestRoutineSchema } from "shared/routine";
+import type { OperationalPlan } from "shared/playbook";
 import { z } from "zod";
 import { getDb } from "../db/client";
 import { operationalPlans, routineRuns, trades, users } from "../db/schema";
@@ -13,6 +14,7 @@ import { ulid } from "../lib/ids";
 import { clearDemoUsers, seedDemoUsers } from "../lib/demo-seed";
 import { invalidateUserAlpacaCaches } from "../lib/user-cache";
 import { requireSession, type AppEnv } from "../middleware/session";
+import { refreshFactors, runConnectivityProbe, REFRESH_MAX_SYMBOLS_PER_CALL } from "../data/factors";
 
 const testOrderSchema = z.object({
   symbol: z.string().trim().toUpperCase().min(1).max(8),
@@ -221,6 +223,117 @@ adminRoutes.get("/test-order/:id", async (c) => {
     return c.json({ error: "fetch_failed", message: err instanceof Error ? err.message : String(err) }, 502);
   }
 });
+
+async function loadAdminAlpacaCreds(env: Env, userId: string): Promise<AlpacaCreds | null> {
+  const db = getDb(env.DB);
+  const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!u?.alpacaKeyCiphertext || !u?.alpacaKeyIv || !u?.alpacaSecretCiphertext || !u?.alpacaSecretIv) {
+    return null;
+  }
+  const apiKey = await open(
+    { ciphertext: u.alpacaKeyCiphertext, iv: u.alpacaKeyIv },
+    env.ALPACA_KEY_ENCRYPTION_KEY,
+  );
+  const apiSecret = await open(
+    { ciphertext: u.alpacaSecretCiphertext, iv: u.alpacaSecretIv },
+    env.ALPACA_KEY_ENCRYPTION_KEY,
+  );
+  return { apiKey, apiSecret };
+}
+
+adminRoutes.post("/factors/probe", async (c) => {
+  const user = c.get("user");
+  const creds = await loadAdminAlpacaCreds(c.env, user.id);
+  if (!creds) {
+    return c.json(
+      {
+        error: "alpaca_not_linked",
+        message:
+          "Probe needs Alpaca creds for the news connectivity check. Link Alpaca on the admin account first, or call /factors/probe-keys for key-only checks.",
+      },
+      400,
+    );
+  }
+  try {
+    const result = await runConnectivityProbe(c.env, creds);
+    const allOk = result.finnhub.ok && result.fred.ok && result.alpacaNews.ok;
+    return c.json({ ok: allOk, ...result });
+  } catch (err) {
+    console.error("factors probe error", err);
+    return c.json(
+      { error: "probe_failed", message: err instanceof Error ? err.message : String(err) },
+      500,
+    );
+  }
+});
+
+const refreshFactorsSchema = z.object({
+  symbols: z.array(z.string().trim().min(1).max(8)).max(60).optional(),
+});
+
+adminRoutes.post("/factors/refresh", zValidator("json", refreshFactorsSchema), async (c) => {
+  const user = c.get("user");
+  const { symbols: bodySymbols } = c.req.valid("json");
+  const creds = await loadAdminAlpacaCreds(c.env, user.id);
+  if (!creds) {
+    return c.json(
+      { error: "alpaca_not_linked", message: "Refresh needs Alpaca creds for news. Link Alpaca on the admin account." },
+      400,
+    );
+  }
+
+  let symbols = bodySymbols?.map((s) => s.toUpperCase());
+  let unionUniverse: string[] | null = null;
+  if (!symbols || symbols.length === 0) {
+    unionUniverse = await loadUnionUniverseSymbols(c.env);
+    symbols = unionUniverse.slice(0, REFRESH_MAX_SYMBOLS_PER_CALL);
+  }
+  if (symbols.length === 0) {
+    return c.json({ error: "no_symbols", message: "No approved plans yet — pass `symbols` in the body to refresh ad-hoc." }, 400);
+  }
+
+  try {
+    const summary = await refreshFactors(c.env, creds, symbols);
+    const remaining = unionUniverse ? unionUniverse.slice(REFRESH_MAX_SYMBOLS_PER_CALL) : [];
+    return c.json({
+      ok: summary.failures.length === 0,
+      symbols,
+      maxSymbolsPerCall: REFRESH_MAX_SYMBOLS_PER_CALL,
+      remainingFromUnion: remaining,
+      hint:
+        remaining.length > 0
+          ? `Worker subrequest budget caps each call at ${REFRESH_MAX_SYMBOLS_PER_CALL} symbols. Call again with the next chunk: { "symbols": ${JSON.stringify(remaining.slice(0, REFRESH_MAX_SYMBOLS_PER_CALL))} }`
+          : undefined,
+      ...summary,
+    });
+  } catch (err) {
+    console.error("factors refresh error", err);
+    return c.json(
+      { error: "refresh_failed", message: err instanceof Error ? err.message : String(err) },
+      500,
+    );
+  }
+});
+
+async function loadUnionUniverseSymbols(env: Env): Promise<string[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select({ planJson: operationalPlans.planJson })
+    .from(operationalPlans)
+    .where(inArray(operationalPlans.approvalState, ["approved", "pending"]));
+  const set = new Set<string>();
+  for (const r of rows) {
+    try {
+      const plan = JSON.parse(r.planJson) as OperationalPlan;
+      for (const u of plan.universe ?? []) {
+        if (u?.symbol) set.add(u.symbol.toUpperCase());
+      }
+    } catch {
+      /* ignore malformed plan rows */
+    }
+  }
+  return Array.from(set);
+}
 
 function serializeRun(r: typeof routineRuns.$inferSelect) {
   let decisions: unknown = null;

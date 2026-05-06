@@ -249,6 +249,46 @@ export async function fetchDailyBars(
   return data.bars ?? {};
 }
 
+export async function fetchLongDailyBars(
+  creds: AlpacaCreds,
+  kv: KVNamespace,
+  symbols: string[],
+  days = 220,
+): Promise<Record<string, AlpacaBar[]>> {
+  if (symbols.length === 0) return {};
+  const out: Record<string, AlpacaBar[]> = {};
+  const toFetch: string[] = [];
+  for (const symRaw of symbols) {
+    const sym = symRaw.toUpperCase();
+    const cached = await kv.get<AlpacaBar[]>(`bars:daily:${sym}:v1`, "json");
+    if (cached && cached.length >= days * 0.6) {
+      out[sym] = cached;
+    } else {
+      toFetch.push(sym);
+    }
+  }
+  if (toFetch.length === 0) return out;
+
+  // Fetch up to 50 symbols per Alpaca call to keep URLs reasonable.
+  const batches: string[][] = [];
+  for (let i = 0; i < toFetch.length; i += 50) batches.push(toFetch.slice(i, i + 50));
+  // Ask for ~1.4× the trading-day window in calendar days to cover weekends/holidays.
+  const calendarDays = Math.ceil(days * 1.5);
+  for (const batch of batches) {
+    const fresh = await fetchDailyBars(creds, batch, calendarDays).catch(() => ({} as Record<string, AlpacaBar[]>));
+    for (const sym of batch) {
+      const bars = fresh[sym] ?? [];
+      out[sym] = bars;
+      if (bars.length > 0) {
+        await kv.put(`bars:daily:${sym}:v1`, JSON.stringify(bars), {
+          expirationTtl: 23 * 60 * 60, // refreshed every premarket; 23h leaves a small overlap
+        });
+      }
+    }
+  }
+  return out;
+}
+
 export async function fetchLatestQuotes(
   creds: AlpacaCreds,
   symbols: string[],

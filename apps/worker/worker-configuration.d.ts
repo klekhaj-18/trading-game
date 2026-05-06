@@ -8,4 +8,5 @@ interface Env {
   ALPACA_KEY_ENCRYPTION_KEY: string;
   SESSION_JWT_SECRET: string;
   FINNHUB_API_KEY?: string;
+  FRED_API_KEY?: string;
 }
