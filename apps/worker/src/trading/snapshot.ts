@@ -1,14 +1,22 @@
-import type { AlpacaAccount, AlpacaBar, AlpacaOrder, AlpacaPosition } from "../lib/alpaca";
+import type {
+  AlpacaAccount,
+  AlpacaBar,
+  AlpacaNewsItem,
+  AlpacaOrder,
+  AlpacaPosition,
+} from "../lib/alpaca";
 import {
   fetchAccount,
   fetchClock,
   fetchClosedOrders,
   fetchDailyBars,
   fetchLatestQuotes,
+  fetchNews,
   fetchOpenOrders,
   fetchPositions,
   type AlpacaCreds,
 } from "../lib/alpaca";
+import { fetchNextEarnings, formatEarningsHint, type EarningsItem } from "../lib/finnhub";
 
 export interface OpenOrderSummary {
   id: string;
@@ -47,6 +55,12 @@ export interface AccountContext {
   recentFills: ClosedOrderSummary[];
 }
 
+export interface SymbolNewsItem {
+  headline: string;
+  source: string;
+  createdAt: string;
+}
+
 export interface MarketSnapshot {
   asOf: string;
   marketIsOpen: boolean;
@@ -56,8 +70,24 @@ export interface MarketSnapshot {
     symbol: string;
     lastQuote: { bid: number; ask: number; mid: number } | null;
     dailyBars: { date: string; open: number; high: number; low: number; close: number; volume: number }[];
+    news: SymbolNewsItem[];
+    earnings: EarningsItem | null;
+    earningsHint: string | null;
   }[];
+  broaderMarket: {
+    symbol: string;
+    label: string;
+    lastQuote: { bid: number; ask: number; mid: number } | null;
+    dailyBars: { date: string; open: number; high: number; low: number; close: number; volume: number }[];
+  }[];
+  earningsSource: "finnhub" | "disabled";
 }
+
+const BROADER_MARKET: { symbol: string; label: string }[] = [
+  { symbol: "SPY", label: "S&P 500 ETF" },
+  { symbol: "QQQ", label: "Nasdaq-100 ETF" },
+  { symbol: "VIXY", label: "VIX short-term futures ETF (volatility proxy)" },
+];
 
 export async function buildAccountContext(creds: AlpacaCreds): Promise<AccountContext> {
   const [account, positions, openOrders, closedOrders] = await Promise.all([
@@ -116,33 +146,66 @@ export function accountContextFrom(
   };
 }
 
-export async function buildMarketSnapshot(creds: AlpacaCreds, symbols: string[]): Promise<MarketSnapshot> {
-  const uniq = Array.from(new Set(symbols.map((s) => s.toUpperCase()))).slice(0, 40);
-  const [clock, quotes, bars] = await Promise.all([
+export async function buildMarketSnapshot(
+  env: Env,
+  creds: AlpacaCreds,
+  symbols: string[],
+): Promise<MarketSnapshot> {
+  const planSymbols = Array.from(new Set(symbols.map((s) => s.toUpperCase()))).slice(0, 40);
+  const broaderSymbols = BROADER_MARKET.map((b) => b.symbol);
+  const allSymbols = Array.from(new Set([...planSymbols, ...broaderSymbols]));
+  const [clock, quotes, bars, news, earnings] = await Promise.all([
     fetchClock(creds),
-    fetchLatestQuotes(creds, uniq).catch(() => ({}) as Record<string, { bid: number; ask: number; last: number }>),
-    fetchDailyBars(creds, uniq, 7).catch(() => ({}) as Record<string, AlpacaBar[]>),
+    fetchLatestQuotes(creds, allSymbols).catch(
+      () => ({}) as Record<string, { bid: number; ask: number; last: number }>,
+    ),
+    fetchDailyBars(creds, allSymbols, 7).catch(() => ({}) as Record<string, AlpacaBar[]>),
+    fetchNews(creds, planSymbols, 40, 48).catch(
+      () => ({}) as Record<string, AlpacaNewsItem[]>,
+    ),
+    fetchNextEarnings(env, planSymbols),
   ]);
+  const renderBroader = (sym: string) => {
+    const q = quotes[sym];
+    const symbolBars = (bars[sym] ?? []).slice(-5);
+    return {
+      symbol: sym,
+      lastQuote: q ? { bid: q.bid, ask: q.ask, mid: q.last } : null,
+      dailyBars: symbolBars.map((b) => ({
+        date: b.t,
+        open: b.o,
+        high: b.h,
+        low: b.l,
+        close: b.c,
+        volume: b.v,
+      })),
+    };
+  };
+  const renderPlanSymbol = (sym: string) => {
+    const base = renderBroader(sym);
+    const nList = (news[sym] ?? []).slice(0, 5).map((n) => ({
+      headline: n.headline,
+      source: n.source,
+      createdAt: n.createdAt,
+    }));
+    const earn = earnings.bySymbol[sym] ?? null;
+    return {
+      ...base,
+      news: nList,
+      earnings: earn,
+      earningsHint: formatEarningsHint(earn),
+    };
+  };
   return {
     asOf: clock.timestamp,
     marketIsOpen: clock.is_open,
     nextOpen: clock.next_open,
     nextClose: clock.next_close,
-    symbols: uniq.map((sym) => {
-      const q = quotes[sym];
-      const symbolBars = (bars[sym] ?? []).slice(-5);
-      return {
-        symbol: sym,
-        lastQuote: q ? { bid: q.bid, ask: q.ask, mid: q.last } : null,
-        dailyBars: symbolBars.map((b) => ({
-          date: b.t,
-          open: b.o,
-          high: b.h,
-          low: b.l,
-          close: b.c,
-          volume: b.v,
-        })),
-      };
-    }),
+    symbols: planSymbols.map(renderPlanSymbol),
+    broaderMarket: BROADER_MARKET.map((b) => ({
+      label: b.label,
+      ...renderBroader(b.symbol),
+    })),
+    earningsSource: earnings.source,
   };
 }

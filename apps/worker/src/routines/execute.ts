@@ -128,6 +128,7 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
     const [account, snapshot, tradable] = await Promise.all([
       buildAccountContext(creds),
       buildMarketSnapshot(
+        env,
         creds,
         plan.universe.map((u) => u.symbol),
       ),

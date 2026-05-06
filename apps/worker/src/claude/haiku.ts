@@ -4,7 +4,10 @@ import type { HaikuDecision, HaikuDecisionsOutput, RoutineSlot } from "shared/ro
 import { anthropic } from "./client";
 import type { AccountContext, MarketSnapshot } from "../trading/snapshot";
 
-export const HAIKU_MODEL = "claude-haiku-4-5";
+// The routine-execution model. We started on Haiku 4.5 (cheap, rule-following) and moved
+// to Sonnet 4.6 once broader-market / news context was added — that context only pays off
+// if the executing model can interpret it.
+export const HAIKU_MODEL = "claude-sonnet-4-6";
 export const SUBMIT_DECISIONS_TOOL = "submit_decisions";
 
 const ROUTINE_SYSTEM_PROMPT = `You are the autonomous trader for a player in the **Trading Grand Prix** — a 30-day paper-trading competition between four friends. You run FIVE times per trading day (premarket, open, midmorning, afternoon, close) and execute the player's approved operational plan against their Alpaca paper account.
@@ -19,11 +22,22 @@ HARD CONSTRAINTS (a validation layer enforces these — do NOT try to work aroun
 - Limit orders must have limit_price within 10% of the current mid quote.
 - During premarket (market closed), only 'plan' or 'hold' actions are allowed — no live orders.
 
+CONTEXT YOU HAVE:
+- The player's operational plan (structured JSON + markdown summary).
+- Current account state: equity, cash, open positions with P&L, open orders, last 10 fills.
+- Market clock (is_open, next_open/close).
+- Broader market bars: SPY (S&P 500), QQQ (Nasdaq-100), VIXY (volatility proxy). Use these for risk-on/risk-off tone and relative strength vs the tape.
+- Per-plan-symbol: last quote, last 5 daily bars, next earnings date, and recent news headlines (last 48h).
+- Prior validation failures from recent runs — treat as feedback.
+
 DECISION QUALITY:
 - Bias toward DOING LESS. A 'hold' that preserves capital is usually better than a forced trade.
 - If nothing in the snapshot matches the plan's entry rules cleanly, output 'hold' decisions for current positions and 'plan' actions for anything you're watching. Do not invent setups.
 - When the plan rules are ambiguous, lean conservative — smaller sizing, tighter stops, fewer new positions.
-- Every decision MUST have a rationale that references either the plan's rules or the account state (e.g. "5-day high breakout per plan entry rule 1, volume 1.4x 20-day avg" or "trimming per plan exit rule 2 after +3%").
+- Use news to explain moves: a symbol down 5% is different if a headline says "guidance cut" vs if there's no news and it's just tape action.
+- Use earnings dates for event risk: reduce size or avoid new entries within 2 trading days of a print unless the plan explicitly allows trading earnings.
+- Use broader market context: a stock falling while SPY rallies is relative-weakness; falling with SPY is beta. Weight decisions accordingly.
+- Every decision MUST have a rationale that references concrete context (plan rule, account state, news, earnings proximity, broader market, or bars). Do NOT output generic rationales like "looks good" or "per the plan".
 
 PER-SLOT EMPHASIS (the plan's per_slot_emphasis tells you the slot-specific tilt, but these defaults apply):
 - premarket (09:15 ET): review overnight news mentally, set up plan-only decisions for the day. Market closed, NO LIVE ORDERS.
@@ -194,16 +208,42 @@ function renderSnapshotLayer(snapshot: MarketSnapshot, slot: RoutineSlot, oneSho
   lines.push(`- next_open: ${snapshot.nextOpen}`);
   lines.push(`- next_close: ${snapshot.nextClose}`);
   lines.push("");
-  lines.push("## Per-symbol (quote + last 5 daily bars)");
-  for (const s of snapshot.symbols) {
+  lines.push("## Broader market context (always injected — use for risk-on/risk-off and relative strength)");
+  for (const s of snapshot.broaderMarket) {
     const q = s.lastQuote;
-    const qStr = q ? `bid=${q.bid.toFixed(2)} ask=${q.ask.toFixed(2)} mid=${q.mid.toFixed(2)}` : "no quote";
-    lines.push(`### ${s.symbol} — ${qStr}`);
+    const qStr = q ? `mid=${q.mid.toFixed(2)}` : "no quote";
+    lines.push(`### ${s.symbol} · ${s.label} — ${qStr}`);
     if (s.dailyBars.length === 0) {
       lines.push("(no bars)");
     } else {
       for (const b of s.dailyBars) {
         lines.push(`- ${b.date.slice(0, 10)}: o=${b.open.toFixed(2)} h=${b.high.toFixed(2)} l=${b.low.toFixed(2)} c=${b.close.toFixed(2)} v=${b.volume}`);
+      }
+    }
+  }
+  lines.push("");
+  lines.push("## Per-plan-symbol (quote · bars · next earnings · recent news)");
+  if (snapshot.earningsSource === "disabled") {
+    lines.push("_(earnings calendar unavailable — FINNHUB_API_KEY not set; ignore earnings-based plan rules this run)_");
+  }
+  for (const s of snapshot.symbols) {
+    const q = s.lastQuote;
+    const qStr = q ? `bid=${q.bid.toFixed(2)} ask=${q.ask.toFixed(2)} mid=${q.mid.toFixed(2)}` : "no quote";
+    lines.push(`### ${s.symbol} — ${qStr}`);
+    if (s.earningsHint) lines.push(`- ${s.earningsHint}`);
+    if (s.dailyBars.length === 0) {
+      lines.push("(no bars)");
+    } else {
+      for (const b of s.dailyBars) {
+        lines.push(`- ${b.date.slice(0, 10)}: o=${b.open.toFixed(2)} h=${b.high.toFixed(2)} l=${b.low.toFixed(2)} c=${b.close.toFixed(2)} v=${b.volume}`);
+      }
+    }
+    if (s.news.length > 0) {
+      lines.push(`Recent news (last 48h, most recent first):`);
+      for (const n of s.news) {
+        const when = n.createdAt.replace("T", " ").slice(0, 16);
+        const src = n.source ? `${n.source}` : "news";
+        lines.push(`- ${when}Z · ${src} — "${n.headline}"`);
       }
     }
   }

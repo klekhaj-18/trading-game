@@ -273,6 +273,73 @@ interface AlpacaAsset {
   class: string;
 }
 
+export interface AlpacaNewsItem {
+  id: number;
+  headline: string;
+  summary: string;
+  author: string;
+  source: string;
+  symbols: string[];
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchNews(
+  creds: AlpacaCreds,
+  symbols: string[],
+  limitPerBatch = 50,
+  hoursBack = 48,
+): Promise<Record<string, AlpacaNewsItem[]>> {
+  if (symbols.length === 0) return {};
+  const start = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+  const params = new URLSearchParams({
+    symbols: symbols.join(","),
+    start,
+    limit: String(limitPerBatch),
+    sort: "desc",
+    include_content: "false",
+  });
+  let data: {
+    news: Array<{
+      id: number;
+      headline: string;
+      summary?: string;
+      author?: string;
+      source?: string;
+      symbols?: string[];
+      url?: string;
+      created_at: string;
+      updated_at?: string;
+    }>;
+  };
+  try {
+    data = await alpacaFetch(`${DATA_BASE}/v1beta1/news?${params.toString()}`, creds);
+  } catch (err) {
+    console.warn("news fetch failed", err);
+    return {};
+  }
+  const bySymbol: Record<string, AlpacaNewsItem[]> = {};
+  for (const sym of symbols) bySymbol[sym.toUpperCase()] = [];
+  for (const n of data.news ?? []) {
+    const item: AlpacaNewsItem = {
+      id: n.id,
+      headline: n.headline,
+      summary: n.summary ?? "",
+      author: n.author ?? "",
+      source: n.source ?? "",
+      symbols: (n.symbols ?? []).map((s) => s.toUpperCase()),
+      url: n.url ?? "",
+      createdAt: n.created_at,
+      updatedAt: n.updated_at ?? n.created_at,
+    };
+    for (const sym of item.symbols) {
+      if (sym in bySymbol) bySymbol[sym]!.push(item);
+    }
+  }
+  return bySymbol;
+}
+
 export async function fetchTradableSymbols(creds: AlpacaCreds, kv: KVNamespace): Promise<Set<string>> {
   const cacheKey = "alpaca:tradable_symbols:v1";
   const cached = await kv.get(cacheKey);
