@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { IntentSummary } from "shared/intent";
 import type { OperationalPlan } from "shared/playbook";
-import type { HaikuDecision, HaikuDecisionsOutput, RoutineSlot } from "shared/routine";
+import type { RoutineDecision, RoutineDecisionsOutput, RoutineSlot } from "shared/routine";
 import { anthropic } from "./client";
 import { OPUS_MODEL, SONNET_MODEL } from "./prompts";
 import type { AccountContext, MarketSnapshot } from "../trading/snapshot";
@@ -32,8 +32,13 @@ CONTEXT YOU HAVE:
 - Current account state: equity, cash, open positions with P&L, open orders, last 10 fills.
 - Market clock (is_open, next_open/close).
 - Broader market bars: SPY (S&P 500), QQQ (Nasdaq-100), VIXY (volatility proxy). Use these for risk-on/risk-off tone and relative strength vs the tape.
+- Macro regime card (when available): VIX level, 10y-2y yield spread, DXY trend, SPY/QQQ price-vs-SMA50/200, and 11-sector 20-day momentum. Use this to set risk posture: high VIX or inverted curve = trim size and tighten stops; sector rotation = lean toward leaders.
 - Per-plan-symbol: last quote, last 5 daily bars, next earnings date, and recent news headlines (last 48h).
+- Per-plan-symbol pre-classified sentiment summary (when available): per-headline bullish/bearish/neutral/mixed labels with rationales, plus an aggregate score. Treat the summary as guidance, not gospel — the headlines themselves are still in the snapshot for cross-checking.
+- Per-plan-symbol technicals card (when available): SMA20/50/200, % price-vs-SMA, RSI(14), ATR(14) and ATR% of price, 10d/30d realized vol, 52-week high/low and distance from each, 30d relative volume.
 - Prior validation failures from recent runs — treat as feedback.
+
+When the macro regime / sentiment / technicals fields are missing for a symbol, the warm cache hadn't refreshed yet; reason from raw bars and headlines instead and don't pretend you have data you don't.
 
 DECISION QUALITY:
 - Bias toward DOING LESS. A 'hold' that preserves capital is usually better than a forced trade.
@@ -139,7 +144,7 @@ export interface RoutineInput {
 }
 
 export interface RoutineLlmResult {
-  decisions: HaikuDecisionsOutput;
+  decisions: RoutineDecisionsOutput;
   model: string;
   usage: {
     input_tokens: number;
@@ -198,7 +203,7 @@ function renderAccountLayer(
     }
   }
   lines.push("");
-  lines.push("## Open / working orders (already submitted — DO NOT duplicate)");
+  lines.push("## Open / working orders (IMMUTABLE — already submitted, treat as existing intent)");
   if (account.openOrders.length === 0) {
     lines.push("(none)");
   } else {
@@ -210,7 +215,7 @@ function renderAccountLayer(
     }
     lines.push("");
     lines.push(
-      "If any of these working orders would satisfy a decision you'd otherwise make, skip that decision. To replace or cancel them, output a 'plan' action with a rationale that references the order id.",
+      "Open orders are immutable for this routine. If one would satisfy a decision you'd otherwise make, skip that decision and move on. Do NOT propose to replace or cancel them — the player will manage them from Pit Wall if they want changes. The validator also blocks duplicate same-side orders on the same symbol.",
     );
   }
   lines.push("");
@@ -262,8 +267,45 @@ function renderSnapshotLayer(snapshot: MarketSnapshot, slot: RoutineSlot, oneSho
   lines.push(`- market_is_open: ${snapshot.marketIsOpen}`);
   lines.push(`- next_open: ${snapshot.nextOpen}`);
   lines.push(`- next_close: ${snapshot.nextClose}`);
+  lines.push(`- factor_cache: ${snapshot.factorSource}${snapshot.factorSource === "cold" ? " (warm cron hasn't populated KV yet — sentiment/technicals/regime omitted)" : ""}`);
   lines.push("");
-  lines.push("## Broader market context (always injected — use for risk-on/risk-off and relative strength)");
+
+  // Macro regime card (warm cron output)
+  if (snapshot.regime) {
+    const r = snapshot.regime;
+    lines.push("## Macro regime (use to calibrate risk posture)");
+    if (r.vixLevel != null) lines.push(`- VIX: ${r.vixLevel.toFixed(2)}${r.vixDate ? ` (as of ${r.vixDate})` : ""}`);
+    if (r.yieldSpread10y2y != null) lines.push(`- 10y-2y yield spread: ${r.yieldSpread10y2y.toFixed(2)}%${r.yieldSpread10y2y < 0 ? " (INVERTED)" : ""}`);
+    if (r.dxy != null) lines.push(`- DXY (broad dollar index): ${r.dxy.toFixed(2)}`);
+    if (r.spy.lastClose != null) {
+      const v50 = r.spy.pctVsSma50 != null ? `${r.spy.pctVsSma50.toFixed(2)}% vs SMA50` : "n/a";
+      const v200 = r.spy.pctVsSma200 != null ? `${r.spy.pctVsSma200.toFixed(2)}% vs SMA200` : "n/a";
+      lines.push(`- SPY: last=${r.spy.lastClose.toFixed(2)}, ${v50}, ${v200}`);
+    }
+    if (r.qqq.lastClose != null) {
+      const v50 = r.qqq.pctVsSma50 != null ? `${r.qqq.pctVsSma50.toFixed(2)}% vs SMA50` : "n/a";
+      const v200 = r.qqq.pctVsSma200 != null ? `${r.qqq.pctVsSma200.toFixed(2)}% vs SMA200` : "n/a";
+      lines.push(`- QQQ: last=${r.qqq.lastClose.toFixed(2)}, ${v50}, ${v200}`);
+    }
+    if (r.sectorLeader && r.sectorLaggard) {
+      const leadR = r.sectorLeader.return20dPct != null ? `${r.sectorLeader.return20dPct.toFixed(2)}%` : "n/a";
+      const lagR = r.sectorLaggard.return20dPct != null ? `${r.sectorLaggard.return20dPct.toFixed(2)}%` : "n/a";
+      lines.push(
+        `- Sector leader: ${r.sectorLeader.symbol} (${r.sectorLeader.label}) ${leadR} 20d · laggard: ${r.sectorLaggard.symbol} (${r.sectorLaggard.label}) ${lagR} 20d`,
+      );
+    }
+    if (r.sectorMomentum && r.sectorMomentum.length > 0) {
+      const ranked = [...r.sectorMomentum]
+        .filter((s) => s.return20dPct != null)
+        .sort((a, b) => (b.return20dPct ?? 0) - (a.return20dPct ?? 0));
+      if (ranked.length > 0) {
+        lines.push(`- Sector momentum (20d, ranked): ${ranked.map((s) => `${s.symbol}=${(s.return20dPct ?? 0).toFixed(1)}%`).join(", ")}`);
+      }
+    }
+    lines.push("");
+  }
+
+  lines.push("## Broader market context (use for risk-on/risk-off tone and relative strength)");
   for (const s of snapshot.broaderMarket) {
     const q = s.lastQuote;
     const qStr = q ? `mid=${q.mid.toFixed(2)}` : "no quote";
@@ -277,7 +319,7 @@ function renderSnapshotLayer(snapshot: MarketSnapshot, slot: RoutineSlot, oneSho
     }
   }
   lines.push("");
-  lines.push("## Per-plan-symbol (quote · bars · next earnings · recent news)");
+  lines.push("## Per-plan-symbol (quote · technicals · bars · earnings · news · sentiment)");
   if (snapshot.earningsSource === "disabled") {
     lines.push("_(earnings calendar unavailable — FINNHUB_API_KEY not set; ignore earnings-based plan rules this run)_");
   }
@@ -286,6 +328,21 @@ function renderSnapshotLayer(snapshot: MarketSnapshot, slot: RoutineSlot, oneSho
     const qStr = q ? `bid=${q.bid.toFixed(2)} ask=${q.ask.toFixed(2)} mid=${q.mid.toFixed(2)}` : "no quote";
     lines.push(`### ${s.symbol} — ${qStr}`);
     if (s.earningsHint) lines.push(`- ${s.earningsHint}`);
+
+    if (s.technicals) {
+      const t = s.technicals;
+      const v50 = t.pricePosVsSma50Pct != null ? `${t.pricePosVsSma50Pct.toFixed(2)}% vs SMA50` : null;
+      const v200 = t.pricePosVsSma200Pct != null ? `${t.pricePosVsSma200Pct.toFixed(2)}% vs SMA200` : null;
+      const rsi = t.rsi14 != null ? `RSI14=${t.rsi14.toFixed(1)}` : null;
+      const atr = t.atr14PctOfPrice != null ? `ATR14=${t.atr14PctOfPrice.toFixed(2)}%` : null;
+      const rv30 = t.realizedVol30dAnnPct != null ? `RV30d=${t.realizedVol30dAnnPct.toFixed(1)}%` : null;
+      const fromHi = t.pctFromFiftyTwoWeekHigh != null ? `${t.pctFromFiftyTwoWeekHigh.toFixed(1)}% from 52w high` : null;
+      const fromLo = t.pctFromFiftyTwoWeekLow != null ? `+${t.pctFromFiftyTwoWeekLow.toFixed(1)}% from 52w low` : null;
+      const relVol = t.relativeVolume30d != null ? `relVol=${t.relativeVolume30d.toFixed(2)}x` : null;
+      const parts = [v50, v200, rsi, atr, rv30, fromHi, fromLo, relVol].filter((x): x is string => !!x);
+      if (parts.length > 0) lines.push(`- Technicals: ${parts.join(" · ")}`);
+    }
+
     if (s.dailyBars.length === 0) {
       lines.push("(no bars)");
     } else {
@@ -293,6 +350,21 @@ function renderSnapshotLayer(snapshot: MarketSnapshot, slot: RoutineSlot, oneSho
         lines.push(`- ${b.date.slice(0, 10)}: o=${b.open.toFixed(2)} h=${b.high.toFixed(2)} l=${b.low.toFixed(2)} c=${b.close.toFixed(2)} v=${b.volume}`);
       }
     }
+
+    if (s.sentiment && s.sentiment.scoredCount > 0) {
+      const sm = s.sentiment;
+      const avg = sm.averageScore != null ? sm.averageScore.toFixed(2) : "n/a";
+      lines.push(
+        `- Sentiment summary (${sm.scoredCount} scored): avg=${avg}, bull=${sm.bullishCount} bear=${sm.bearishCount} neutral=${sm.neutralCount} mixed=${sm.mixedCount}`,
+      );
+      if (sm.topHeadlines.length > 0) {
+        lines.push(`  Top by abs(score):`);
+        for (const h of sm.topHeadlines.slice(0, 3)) {
+          lines.push(`  - [${h.label} ${h.score.toFixed(2)}] "${h.headline}" — ${h.rationale}`);
+        }
+      }
+    }
+
     if (s.news.length > 0) {
       lines.push(`Recent news (last 48h, most recent first):`);
       for (const n of s.news) {
@@ -369,14 +441,14 @@ export async function runRoutineLlm(env: Env, input: RoutineInput): Promise<Rout
       .map((b) => b.text)
       .join("\n");
     throw new Error(
-      `Haiku did not call submit_decisions. stop_reason=${response.stop_reason ?? "null"}. text: ${textBlocks.slice(0, 500)}`,
+      `Routine LLM did not call submit_decisions. stop_reason=${response.stop_reason ?? "null"}. text: ${textBlocks.slice(0, 500)}`,
     );
   }
-  const decisions = toolBlock.input as HaikuDecisionsOutput;
+  const decisions = toolBlock.input as RoutineDecisionsOutput;
   if (!decisions || !Array.isArray(decisions.decisions) || decisions.decisions.length === 0) {
-    throw new Error("Haiku submit_decisions returned an empty decisions array");
+    throw new Error("Routine LLM submit_decisions returned an empty decisions array");
   }
-  decisions.decisions = decisions.decisions.map((d: HaikuDecision) => ({
+  decisions.decisions = decisions.decisions.map((d: RoutineDecision) => ({
     ...d,
     symbol: String(d.symbol || "").toUpperCase(),
     qty: Number(d.qty) || 0,

@@ -1,7 +1,7 @@
 import { and, desc, eq, gt } from "drizzle-orm";
 import type {
-  HaikuDecision,
   PlacedOrderSummary,
+  RoutineDecision,
   RoutineKind,
   RoutineSlot,
   RoutineStatus,
@@ -15,7 +15,7 @@ import { ulid } from "../lib/ids";
 import { open } from "../lib/crypto";
 import { AlpacaAuthError, fetchTradableSymbols, placeOrder, type AlpacaCreds } from "../lib/alpaca";
 import { invalidateUserAlpacaCaches } from "../lib/user-cache";
-import { runRoutineLlm } from "../claude/haiku";
+import { runRoutineLlm } from "../claude/routine-llm";
 import { buildAccountContext, buildMarketSnapshot } from "../trading/snapshot";
 import { validateDecisions } from "../trading/validate";
 
@@ -36,7 +36,7 @@ export interface ExecuteRoutineInput {
 export interface ExecuteRoutineResult {
   runId: string;
   status: RoutineStatus;
-  decisions: HaikuDecision[] | null;
+  decisions: RoutineDecision[] | null;
   validationFailures: ValidationFailure[];
   orders: PlacedOrderSummary[];
   reasoning: string | null;
@@ -326,7 +326,7 @@ async function reconcileIntents(
     runId: string;
     intents: IntentSummary[];
     consumed: { id: string; status: "honored" | "rejected" | "deferred"; reason?: string }[];
-    decisions: HaikuDecision[];
+    decisions: RoutineDecision[];
     placedDecisionIndices: Set<number>;
   },
 ): Promise<void> {
@@ -343,7 +343,7 @@ async function reconcileIntents(
 
   for (const intent of args.intents) {
     if (placedIntentIds.has(intent.id)) {
-      // Order placed for this intent — honor it regardless of what Haiku declared.
+      // Order placed for this intent — honor it regardless of what the routine LLM declared.
       await db
         .update(userIntents)
         .set({
@@ -365,20 +365,20 @@ async function reconcileIntents(
           .set({
             status: "rejected",
             routineRunId: args.runId,
-            rejectedReason: declared.reason ?? "binding intent cannot be deferred — Haiku must honor or reject",
+            rejectedReason: declared.reason ?? "binding intent cannot be deferred — routine LLM must honor or reject",
             consumedAt: nowSec,
           })
           .where(eq(userIntents.id, intent.id));
         continue;
       }
       const finalStatus = declared.status === "honored" ? "honored" : "rejected";
-      // 'honored' without a placed order is suspicious but we trust Haiku for now.
+      // 'honored' without a placed order is suspicious but we trust the routine LLM for now.
       await db
         .update(userIntents)
         .set({
           status: finalStatus,
           routineRunId: args.runId,
-          rejectedReason: finalStatus === "rejected" ? declared.reason ?? "rejected by Haiku" : null,
+          rejectedReason: finalStatus === "rejected" ? declared.reason ?? "rejected by routine LLM" : null,
           consumedAt: nowSec,
         })
         .where(eq(userIntents.id, intent.id));
@@ -391,7 +391,7 @@ async function reconcileIntents(
         .set({
           status: "rejected",
           routineRunId: args.runId,
-          rejectedReason: "Haiku failed to address binding instruction",
+          rejectedReason: "Routine LLM failed to address binding instruction",
           consumedAt: nowSec,
         })
         .where(eq(userIntents.id, intent.id));

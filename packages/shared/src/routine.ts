@@ -27,7 +27,7 @@ export type RoutineStatus =
 export const decisionActionSchema = z.enum(["buy", "sell", "plan", "hold"]);
 export type DecisionAction = z.infer<typeof decisionActionSchema>;
 
-export interface HaikuDecision {
+export interface RoutineDecision {
   action: DecisionAction;
   symbol: string;
   qty: number;
@@ -47,9 +47,9 @@ export interface ConsumedIntent {
   reason?: string;
 }
 
-export interface HaikuDecisionsOutput {
+export interface RoutineDecisionsOutput {
   reasoning: string;
-  decisions: HaikuDecision[];
+  decisions: RoutineDecision[];
   consumed_intents?: ConsumedIntent[];
 }
 
@@ -60,7 +60,7 @@ export interface RoutineRunSummary {
   oneShotInstruction: string | null;
   claudeModel: string | null;
   claudeReasoning: string | null;
-  decisions: HaikuDecision[] | null;
+  decisions: RoutineDecision[] | null;
   validationFailures: ValidationFailure[];
   orders: PlacedOrderSummary[];
   status: RoutineStatus;

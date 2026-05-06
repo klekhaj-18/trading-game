@@ -17,6 +17,13 @@ import {
   type AlpacaCreds,
 } from "../lib/alpaca";
 import { fetchNextEarnings, formatEarningsHint, type EarningsItem } from "../lib/finnhub";
+import type { SymbolSentimentSummary } from "../lib/sentiment";
+import type { TechnicalsCard } from "../lib/technicals";
+import {
+  readAggregatedRegime,
+  readAggregatedSymbolFactors,
+  type AggregatedRegime,
+} from "../data/factors";
 
 export interface OpenOrderSummary {
   id: string;
@@ -73,6 +80,10 @@ export interface MarketSnapshot {
     news: SymbolNewsItem[];
     earnings: EarningsItem | null;
     earningsHint: string | null;
+    /** Pre-classified sentiment for the recent headlines (warm cron output). Null when KV is cold. */
+    sentiment: SymbolSentimentSummary | null;
+    /** Computed technicals from 220-day bars (warm cron output). Null when KV is cold. */
+    technicals: TechnicalsCard | null;
   }[];
   broaderMarket: {
     symbol: string;
@@ -81,6 +92,10 @@ export interface MarketSnapshot {
     dailyBars: { date: string; open: number; high: number; low: number; close: number; volume: number }[];
   }[];
   earningsSource: "finnhub" | "disabled";
+  /** Macro regime card from the warm cron (VIX, yield curve, DXY, sector momentum). Null when KV is cold. */
+  regime: AggregatedRegime | null;
+  /** Diagnostic — "warm" when at least one symbol's agg blob is present; "cold" if all reads missed. */
+  factorSource: "warm" | "cold";
 }
 
 const BROADER_MARKET: { symbol: string; label: string }[] = [
@@ -154,7 +169,7 @@ export async function buildMarketSnapshot(
   const planSymbols = Array.from(new Set(symbols.map((s) => s.toUpperCase()))).slice(0, 40);
   const broaderSymbols = BROADER_MARKET.map((b) => b.symbol);
   const allSymbols = Array.from(new Set([...planSymbols, ...broaderSymbols]));
-  const [clock, quotes, bars, news, earnings] = await Promise.all([
+  const [clock, quotes, bars, news, earnings, aggSymbols, regime] = await Promise.all([
     fetchClock(creds),
     fetchLatestQuotes(creds, allSymbols).catch(
       () => ({}) as Record<string, { bid: number; ask: number; last: number }>,
@@ -164,7 +179,13 @@ export async function buildMarketSnapshot(
       () => ({}) as Record<string, AlpacaNewsItem[]>,
     ),
     fetchNextEarnings(env, planSymbols),
+    Promise.all(planSymbols.map((s) => readAggregatedSymbolFactors(env, s).catch(() => null))),
+    readAggregatedRegime(env).catch(() => null),
   ]);
+  const aggBySymbol = new Map<string, (typeof aggSymbols)[number]>();
+  planSymbols.forEach((s, i) => aggBySymbol.set(s, aggSymbols[i] ?? null));
+  const anyAggHit = aggSymbols.some((b) => b != null) || regime != null;
+
   const renderBroader = (sym: string) => {
     const q = quotes[sym];
     const symbolBars = (bars[sym] ?? []).slice(-5);
@@ -189,11 +210,14 @@ export async function buildMarketSnapshot(
       createdAt: n.createdAt,
     }));
     const earn = earnings.bySymbol[sym] ?? null;
+    const agg = aggBySymbol.get(sym) ?? null;
     return {
       ...base,
       news: nList,
       earnings: earn,
       earningsHint: formatEarningsHint(earn),
+      sentiment: agg?.scoredSentiment ?? null,
+      technicals: agg?.technicals ?? null,
     };
   };
   return {
@@ -207,5 +231,7 @@ export async function buildMarketSnapshot(
       ...renderBroader(b.symbol),
     })),
     earningsSource: earnings.source,
+    regime,
+    factorSource: anyAggHit ? "warm" : "cold",
   };
 }

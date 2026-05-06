@@ -1,5 +1,5 @@
 import type { OperationalPlan } from "shared/playbook";
-import type { HaikuDecision, ValidationFailure } from "shared/routine";
+import type { RoutineDecision, ValidationFailure } from "shared/routine";
 import type { AccountContext, MarketSnapshot } from "./snapshot";
 
 export interface ValidationContext {
@@ -12,7 +12,7 @@ export interface ValidationContext {
 }
 
 export interface ValidationResult {
-  accepted: { decision: HaikuDecision; index: number }[];
+  accepted: { decision: RoutineDecision; index: number }[];
   failures: ValidationFailure[];
 }
 
@@ -21,8 +21,8 @@ const HARD_CONCENTRATION_CAP = 0.25;
 const BP_UTILIZATION_CAP = 0.95;
 const LIMIT_PRICE_BAND = 0.1;
 
-export function validateDecisions(decisions: HaikuDecision[], ctx: ValidationContext): ValidationResult {
-  const accepted: { decision: HaikuDecision; index: number }[] = [];
+export function validateDecisions(decisions: RoutineDecision[], ctx: ValidationContext): ValidationResult {
+  const accepted: { decision: RoutineDecision; index: number }[] = [];
   const failures: ValidationFailure[] = [];
 
   const universeSet = new Set(ctx.plan.universe.map((u) => u.symbol.toUpperCase()));
