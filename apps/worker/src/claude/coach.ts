@@ -168,15 +168,6 @@ function renderContext(ctx: CoachContext): string {
 export async function coachTurn(env: Env, messages: CoachMessage[], ctx: CoachContext): Promise<CoachTurnResult> {
   const client = anthropic(env);
   const contextBlock = renderContext(ctx);
-  const userMessages = messages.map((m) => ({ role: m.role, content: m.content }));
-  // Prepend the strategy context to the first user message so the coach sees it without it counting as a separate turn.
-  if (userMessages.length > 0 && userMessages[0]!.role === "user") {
-    userMessages[0] = {
-      role: "user",
-      content: `${contextBlock}\n\n${userMessages[0]!.content}`,
-    };
-  }
-
   const response = await client.messages.create({
     model: OPUS_MODEL,
     max_tokens: 8192,
@@ -188,10 +179,14 @@ export async function coachTurn(env: Env, messages: CoachMessage[], ctx: CoachCo
         text: COACH_SYSTEM,
         cache_control: { type: "ephemeral" },
       },
+      {
+        type: "text",
+        text: contextBlock,
+      },
     ],
     tools: [commitDraftTool, proposePlaybookRevisionTool, proposePlanRevisionTool],
     tool_choice: { type: "auto" },
-    messages: userMessages,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
 
   const textBlocks = response.content
