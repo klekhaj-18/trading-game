@@ -94,9 +94,11 @@ const SECTIONS: FaqSection[] = [
         ),
         technical: (
           <>
-            Haiku 4.5 with 4-layer prompt caching — system / plan / account context / market
-            snapshot. Cache breakpoints are stable across the day so repeat runs read mostly from
-            cache.
+            Model is picked per slot: <span className="font-semibold">Opus 4.7</span> for the two
+            highest-leverage slots (premarket and close), <span className="font-semibold">Sonnet 4.6</span>{" "}
+            for the three intraday slots. 3 cache breakpoints (system / plan / account) plus a
+            fresh market-snapshot layer; cache hits on call 2+. Tool call:{" "}
+            <code>submit_decisions</code>.
           </>
         ),
       },
@@ -104,17 +106,218 @@ const SECTIONS: FaqSection[] = [
         q: "When do routines fire?",
         a: (
           <>
-            Five times per US trading day — premarket, market open, mid-morning, afternoon, and
-            pre-close. The next fire-time shows on the Leaderboard. Plus a sixth "warm" slot 30
-            minutes before premarket that pre-fetches market data so the trading routines don't
-            wait.
+            Five trading routines per US trading day — premarket, open, mid-morning, afternoon,
+            and pre-close. Plus a sixth "warm" slot 30 minutes before premarket that pre-fetches
+            market data so trading routines don't wait. The next fire-time shows on the
+            Leaderboard banner. See the next item for what each slot does.
           </>
         ),
         technical: (
           <>
-            Six Cloudflare Cron Triggers. Race-gated (no fires pre-race / post-race), weekday-gated
-            to US trading days. Holidays are absorbed by Alpaca's market-closed signal — routines
-            run, but validators downgrade or skip orders.
+            Six Cloudflare Cron Triggers, fixed in UTC. Race-gated (no fires pre-race /
+            post-race), weekday-gated (Mon–Fri). Holidays are absorbed by Alpaca's market-closed
+            signal — routines run, but validators downgrade live orders to "plan" actions.
+          </>
+        ),
+      },
+      {
+        q: "What does each of the 6 routines actually do?",
+        a: (
+          <>
+            <p className="mb-3">
+              Five trading slots that touch the market, plus one "warm" slot that just refreshes
+              cached data. Times below are in <span className="font-semibold">US Eastern (EDT)</span>{" "}
+              — the cron is fixed in UTC and tuned for daylight time, so during EST (Nov–Mar) every
+              slot fires <span className="italic">one hour earlier</span> in ET.
+            </p>
+            <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
+              <table className="w-full text-xs min-w-[640px]">
+                <thead className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  <tr className="border-b border-zinc-800">
+                    <th className="text-left py-2 pr-3 font-semibold">UTC cron</th>
+                    <th className="text-left py-2 pr-3 font-semibold">ET (EDT)</th>
+                    <th className="text-left py-2 pr-3 font-semibold">Slot</th>
+                    <th className="text-left py-2 pr-3 font-semibold">Model</th>
+                    <th className="text-left py-2 font-semibold">Job</th>
+                  </tr>
+                </thead>
+                <tbody className="text-zinc-300 align-top">
+                  <tr className="border-b border-zinc-900">
+                    <td className="py-2 pr-3 font-mono text-[11px]">12:45</td>
+                    <td className="py-2 pr-3 font-mono text-[11px]">08:45</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded bg-zinc-800/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-zinc-300">warm</span>
+                    </td>
+                    <td className="py-2 pr-3 text-[11px]">Haiku 4.5 (per-headline)</td>
+                    <td className="py-2 text-zinc-400">
+                      Refresh the union universe across all approved players: news, daily bars,
+                      Finnhub profile/metrics/earnings, FRED macro, sector momentum, sentiment
+                      scoring. No LLM trade decisions, no orders. If this fails, the 09:15 slot
+                      runs an inline fallback.
+                    </td>
+                  </tr>
+                  <tr className="border-b border-zinc-900">
+                    <td className="py-2 pr-3 font-mono text-[11px]">13:15</td>
+                    <td className="py-2 pr-3 font-mono text-[11px]">09:15</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded bg-blue-500/20 border border-blue-500/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-200">
+                        premarket
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-[11px] font-semibold text-amber-200">Opus 4.7</td>
+                    <td className="py-2 text-zinc-400">
+                      Review overnight news; set the day's posture. Market is closed, so live
+                      orders are auto-downgraded to "plan" actions. High-leverage slot — uses Opus.
+                    </td>
+                  </tr>
+                  <tr className="border-b border-zinc-900">
+                    <td className="py-2 pr-3 font-mono text-[11px]">13:35</td>
+                    <td className="py-2 pr-3 font-mono text-[11px]">09:35</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded bg-blue-500/20 border border-blue-500/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-200">
+                        open
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-[11px]">Sonnet 4.6</td>
+                    <td className="py-2 text-zinc-400">
+                      Execute conviction entries after opening spreads settle (~5 min after the
+                      bell).
+                    </td>
+                  </tr>
+                  <tr className="border-b border-zinc-900">
+                    <td className="py-2 pr-3 font-mono text-[11px]">15:30</td>
+                    <td className="py-2 pr-3 font-mono text-[11px]">11:30</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded bg-blue-500/20 border border-blue-500/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-200">
+                        midmorning
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-[11px]">Sonnet 4.6</td>
+                    <td className="py-2 text-zinc-400">Trim losers, add to winners per the plan.</td>
+                  </tr>
+                  <tr className="border-b border-zinc-900">
+                    <td className="py-2 pr-3 font-mono text-[11px]">18:00</td>
+                    <td className="py-2 pr-3 font-mono text-[11px]">14:00</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded bg-blue-500/20 border border-blue-500/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-200">
+                        afternoon
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-[11px]">Sonnet 4.6</td>
+                    <td className="py-2 text-zinc-400">Sizing review, reassess stops.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-3 font-mono text-[11px]">19:45</td>
+                    <td className="py-2 pr-3 font-mono text-[11px]">15:45</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded bg-blue-500/20 border border-blue-500/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-200">
+                        close
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-[11px] font-semibold text-amber-200">Opus 4.7</td>
+                    <td className="py-2 text-zinc-400">
+                      Square up or protect gains per the plan. Pre-close (~15 min before bell);
+                      another high-leverage slot, uses Opus.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-3 text-xs text-zinc-400">
+              Equity snapshots also piggyback on each slot — that's why the leaderboard updates
+              5–6 times per trading day, not continuously.
+            </p>
+          </>
+        ),
+        technical: (
+          <>
+            Each <span className="font-semibold">trading</span> routine is built from these
+            context layers, in this order:
+            <ul className="mt-2 ml-4 space-y-1 list-disc">
+              <li>
+                <span className="font-semibold text-zinc-200">System</span> (cached) — instructions
+                + hard constraints + per-slot emphasis
+              </li>
+              <li>
+                <span className="font-semibold text-zinc-200">Plan</span> (cached) — your structured
+                operational plan as JSON + a markdown summary
+              </li>
+              <li>
+                <span className="font-semibold text-zinc-200">Account</span> (cached) — equity,
+                cash, BP, positions, open / working orders, last 10 fills, recent validation
+                failures
+              </li>
+              <li>
+                <span className="font-semibold text-zinc-200">Market snapshot</span> (fresh) — Alpaca
+                clock, bid/ask/mid, last 5 daily bars, last 48h news, next earnings (Finnhub), plus
+                broader-market context (SPY, QQQ, VIXY)
+              </li>
+              <li>
+                <span className="font-semibold text-zinc-200">User intents</span> (fresh,
+                conditional) — only injected when you have pending intents
+              </li>
+            </ul>
+            <p className="mt-2">
+              Data sources:{" "}
+              <span className="font-semibold text-zinc-200">Alpaca paper API</span> (account,
+              positions, orders, clock, quotes, bars, news, tradable symbols);{" "}
+              <span className="font-semibold text-zinc-200">Finnhub</span> (next earnings, profile,
+              metrics, economic calendar);{" "}
+              <span className="font-semibold text-zinc-200">FRED</span> (VIX, 10y-2y yield spread,
+              DXY — used by warm cron's regime card).
+            </p>
+            <p className="mt-2">
+              The warm cron writes aggregated factor blobs to KV (sentiment-scored headlines,
+              technicals, regime card) — those are read by the <span className="italic">coach</span>{" "}
+              (playbook revision flow), not the trading routines. Trading routines benefit
+              indirectly because their lib-level fetches (Alpaca news, daily bars, Finnhub
+              earnings) hit the same KV caches the warm slot populates.
+            </p>
+          </>
+        ),
+      },
+      {
+        q: "What about orders I place directly (via Direct order, or in Alpaca itself)?",
+        a: (
+          <>
+            <p className="mb-2">
+              Anything in your Alpaca account is visible to Claude on the next routine — whether
+              the AI placed it, you placed it via{" "}
+              <span className="font-semibold">+ Direct order</span> on Pit Wall, or it came from
+              Alpaca's own UI/API.
+            </p>
+            <ul className="mt-2 ml-4 space-y-1 list-disc text-zinc-300">
+              <li>
+                <span className="font-semibold">Open orders</span> — shown to Claude as "already
+                submitted, do not duplicate". A duplicate-guard in the validator rejects a 2nd buy
+                on the same symbol while one is still open.
+              </li>
+              <li>
+                <span className="font-semibold">Filled positions</span> — Claude treats them as
+                normal holdings; can hold or sell them.
+              </li>
+              <li>
+                <span className="font-semibold">Recent fills (last 10)</span> — show in the
+                account context regardless of source.
+              </li>
+            </ul>
+            <p className="mt-3 text-zinc-300">Two gotchas worth knowing:</p>
+            <ol className="mt-1 ml-4 space-y-1 list-decimal text-zinc-300">
+              <li>
+                <span className="font-semibold">Out-of-universe positions</span>: if you bought
+                XYZ directly and XYZ isn't in your plan's universe, Claude can't sell it via a
+                normal decision (universe check fails). Three escape hatches: sell directly via{" "}
+                "+ Direct order" or "Close position", submit a player intent ("sell my XYZ
+                position" — intents bypass the universe check), or add XYZ to the universe via a
+                playbook revision.
+              </li>
+              <li>
+                <span className="font-semibold">P&amp;L attribution</span>: every trade is tagged{" "}
+                <code>source = "ai"</code> or <code>"direct"</code>. Pit Wall splits realized
+                P&amp;L between AI strategy and Discretionary so you can see how each is doing
+                separately.
+              </li>
+            </ol>
           </>
         ),
       },
@@ -374,19 +577,37 @@ const SECTIONS: FaqSection[] = [
         ),
       },
       {
-        q: "Why two Claude models?",
+        q: "Why three Claude models?",
         a: (
           <>
-            Opus 4.7 is smart and slow — perfect for translating your playbook into a structured
-            plan once. Haiku 4.5 is fast and cheap — perfect for the 30+ routines per week per
-            player. Each model is used where it fits.
+            Each model is used where its trade-off between speed, cost, and reasoning fits best:
+            <ul className="mt-2 ml-4 space-y-1.5 list-disc text-zinc-300">
+              <li>
+                <span className="font-semibold">Opus 4.7</span> — smart and slow. Plan translation
+                (your playbook → structured operational plan, runs once per playbook revision)
+                plus the two highest-leverage routines: premarket and close.
+              </li>
+              <li>
+                <span className="font-semibold">Sonnet 4.6</span> — balanced. The three intraday
+                routines (open, mid-morning, afternoon), plus the conversational coach that helps
+                you revise your playbook before you commit a draft.
+              </li>
+              <li>
+                <span className="font-semibold">Haiku 4.5</span> — fast and cheap. Per-headline
+                sentiment classification during the warm cron (each headline gets a label +
+                directional score; KV-cached, only new headlines hit the API).
+              </li>
+            </ul>
           </>
         ),
         technical: (
           <>
-            Opus 4.7 with adaptive thinking + <code>effort: high</code> for plan translation. Haiku
-            4.5 with 4-layer prompt caching for routines. A separate Sonnet 4.6 coach handles
-            back-and-forth playbook revision before you commit a draft.
+            Opus 4.7: adaptive thinking + <code>effort: high</code> for plan translation;{" "}
+            <code>tool_choice: auto</code> because Opus 4.7 rejects forced tool use combined with
+            adaptive thinking. Sonnet 4.6 coach uses adaptive thinking + <code>commit_draft</code>{" "}
+            tool. Haiku 4.5 sentiment scorer uses <code>tool_choice: tool</code> with{" "}
+            <code>score_headline</code>. Routine model selection lives in{" "}
+            <code>modelForSlot()</code> in <code>apps/worker/src/claude/routine-llm.ts</code>.
           </>
         ),
       },
@@ -394,16 +615,20 @@ const SECTIONS: FaqSection[] = [
         q: "What's prompt caching and why does it matter?",
         a: (
           <>
-            Claude can re-use parts of a prompt it has already processed. We cache four layers —
-            system instructions, your plan, your account context, the fresh market snapshot.
-            Repeat routines are dramatically cheaper and faster than reading everything from
+            Claude can re-use parts of a prompt it has already processed. Each trading routine
+            caches three layers — the system prompt, your operational plan, and your account
+            state — and reads a fresh market-snapshot layer on top. Repeat routines hit the cache
+            on call 2+ and are dramatically cheaper and faster than re-reading everything from
             scratch.
           </>
         ),
         technical: (
           <>
-            Four <code>cache_control: ephemeral</code> breakpoints on Haiku, ordered by stability
-            (most stable outermost). Cache hit verified on call 2+.
+            Three <code>cache_control: ephemeral</code> breakpoints, ordered by stability
+            (system → plan → account). The market-snapshot layer is always fresh; user-intents
+            block (when present) is also fresh. Stable cache breakpoints across the day mean Opus
+            premarket and close routines reuse the same plan + account caches as the intraday
+            Sonnet runs.
           </>
         ),
       },

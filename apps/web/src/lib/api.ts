@@ -16,7 +16,7 @@ import type {
 import type { PnlSplitResponse } from "shared/pnl";
 import type {
   FireTestRoutineInput,
-  HaikuDecision,
+  RoutineDecision,
   PlacedOrderSummary,
   RoutineKind,
   RoutineStatus,
@@ -87,7 +87,7 @@ export interface AdminTestRun {
   oneShotInstruction: string | null;
   claudeModel: string | null;
   claudeReasoning: string | null;
-  decisions: HaikuDecision[] | null;
+  decisions: RoutineDecision[] | null;
   validationFailures: ValidationFailure[];
   orders: PlacedOrderSummary[];
   status: RoutineStatus;
@@ -192,7 +192,7 @@ export const api = {
     request<{
       runId: string;
       status: RoutineStatus;
-      decisions: HaikuDecision[] | null;
+      decisions: RoutineDecision[] | null;
       validationFailures: ValidationFailure[];
       orders: PlacedOrderSummary[];
       reasoning: string | null;
