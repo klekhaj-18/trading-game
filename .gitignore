@@ -14,3 +14,4 @@ build/
 coverage/
 .turbo/
 drizzle/_journal.json.bak
+*.tsbuildinfo
