@@ -110,27 +110,254 @@ function OpenOrdersTable({ orders }: { orders: OpenOrderSummary[] }) {
     );
   }
   return (
-    <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
-          <tr>
-            <th className="text-left px-4 py-2">Symbol</th>
-            <th className="text-left px-4 py-2">Side</th>
-            <th className="text-right px-4 py-2">Qty</th>
-            <th className="text-left px-4 py-2">Type</th>
-            <th className="text-right px-4 py-2">Limit</th>
-            <th className="text-left px-4 py-2">TIF</th>
-            <th className="text-left px-4 py-2">Status</th>
-            <th className="text-right px-4 py-2">Submitted</th>
-            <th className="text-right px-4 py-2">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="tabular-digits">
-          {orders.map((o) => (
-            <OpenOrderRow key={o.id} order={o} />
-          ))}
-        </tbody>
-      </table>
+    <>
+      <div className="sm:hidden space-y-3">
+        {orders.map((o) => (
+          <OpenOrderCard key={o.id} order={o} />
+        ))}
+      </div>
+      <div className="hidden sm:block rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
+            <tr>
+              <th className="text-left px-4 py-2">Symbol</th>
+              <th className="text-left px-4 py-2">Side</th>
+              <th className="text-right px-4 py-2">Qty</th>
+              <th className="text-left px-4 py-2">Type</th>
+              <th className="text-right px-4 py-2">Limit</th>
+              <th className="text-left px-4 py-2">TIF</th>
+              <th className="text-left px-4 py-2">Status</th>
+              <th className="text-right px-4 py-2">Submitted</th>
+              <th className="text-right px-4 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="tabular-digits">
+            {orders.map((o) => (
+              <OpenOrderRow key={o.id} order={o} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function OpenOrderCard({ order }: { order: OpenOrderSummary }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [qty, setQty] = useState<string>(String(order.qty));
+  const [limit, setLimit] = useState<string>(
+    order.limitPrice != null ? order.limitPrice.toFixed(2) : "",
+  );
+  const [tif, setTif] = useState<"day" | "gtc">(
+    order.timeInForce === "gtc" ? "gtc" : "day",
+  );
+  const [errText, setErrText] = useState<string | null>(null);
+
+  const ORDERS_KEY = ["me", "open-orders"] as const;
+
+  const removeLocallyById = (id: string) => {
+    qc.setQueryData<{ orders: OpenOrderSummary[] } | undefined>(ORDERS_KEY, (old) => {
+      if (!old) return old;
+      return { ...old, orders: old.orders.filter((o) => o.id !== id) };
+    });
+  };
+
+  const invalidateAll = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ORDERS_KEY }),
+      qc.invalidateQueries({ queryKey: ["me", "positions"] }),
+    ]);
+
+  const replaceM = useMutation({
+    mutationFn: (input: {
+      qty?: number;
+      limit_price?: number;
+      time_in_force?: "day" | "gtc";
+    }) => api.meReplaceOrder(order.id, input),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ORDERS_KEY });
+      const prev = qc.getQueryData<{ orders: OpenOrderSummary[] }>(ORDERS_KEY);
+      removeLocallyById(order.id);
+      return { prev };
+    },
+    onSuccess: () => {
+      setEditing(false);
+      setErrText(null);
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(ORDERS_KEY, ctx.prev);
+      setErrText(err instanceof ApiError ? err.message : "Replace failed");
+    },
+    onSettled: invalidateAll,
+  });
+
+  const cancelM = useMutation({
+    mutationFn: () => api.meCancelOrder(order.id),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ORDERS_KEY });
+      const prev = qc.getQueryData<{ orders: OpenOrderSummary[] }>(ORDERS_KEY);
+      removeLocallyById(order.id);
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(ORDERS_KEY, ctx.prev);
+      setErrText(err instanceof ApiError ? err.message : "Cancel failed");
+    },
+    onSettled: invalidateAll,
+  });
+
+  const saveEdit = () => {
+    const body: { qty?: number; limit_price?: number; time_in_force?: "day" | "gtc" } = {};
+    const qNum = Number(qty);
+    const lNum = Number(limit);
+    if (Number.isFinite(qNum) && qNum > 0 && qNum !== order.qty) body.qty = qNum;
+    if (order.orderType === "limit" && Number.isFinite(lNum) && lNum > 0 && lNum !== order.limitPrice) {
+      body.limit_price = lNum;
+    }
+    if (tif !== order.timeInForce) body.time_in_force = tif;
+    if (Object.keys(body).length === 0) {
+      setEditing(false);
+      return;
+    }
+    replaceM.mutate(body);
+  };
+
+  const submitted = new Date(order.submittedAt * 1000);
+  const busy = replaceM.isPending || cancelM.isPending;
+
+  return (
+    <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-base font-bold">{order.symbol}</span>
+          <span
+            className={cn(
+              "text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded",
+              order.side === "buy"
+                ? "bg-emerald-950/60 text-emerald-300 border border-emerald-900/60"
+                : "bg-red-950/60 text-red-300 border border-red-900/60",
+            )}
+          >
+            {order.side}
+          </span>
+          <span className="text-[10px] uppercase tracking-wider text-amber-300">
+            {order.status}
+          </span>
+        </div>
+        <span className="text-[10px] text-zinc-500 tabular-digits">
+          {submitted.toLocaleTimeString()}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mt-3 text-xs tabular-digits">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Qty</div>
+          {editing ? (
+            <input
+              type="number"
+              step="1"
+              min="1"
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              className="mt-0.5 w-full rounded bg-black/60 border border-zinc-700 px-2 py-1 tabular-digits text-xs"
+            />
+          ) : (
+            <div className="mt-0.5">
+              {order.filledQty > 0 ? `${order.filledQty}/${order.qty}` : order.qty}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Type</div>
+          <div className="mt-0.5 uppercase">{order.orderType}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Limit</div>
+          {editing && order.orderType === "limit" ? (
+            <input
+              type="number"
+              step="0.01"
+              min="0.01"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              className="mt-0.5 w-full rounded bg-black/60 border border-zinc-700 px-2 py-1 tabular-digits text-xs"
+            />
+          ) : (
+            <div className="mt-0.5">
+              {order.limitPrice != null ? `$${order.limitPrice.toFixed(2)}` : "—"}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">TIF</div>
+          {editing ? (
+            <select
+              value={tif}
+              onChange={(e) => setTif(e.target.value as "day" | "gtc")}
+              className="mt-0.5 w-full rounded bg-black/60 border border-zinc-700 px-2 py-1 uppercase text-xs"
+            >
+              <option value="day">day</option>
+              <option value="gtc">gtc</option>
+            </select>
+          ) : (
+            <div className="mt-0.5 uppercase">{order.timeInForce}</div>
+          )}
+        </div>
+      </div>
+
+      {errText && <div className="mt-2 text-[11px] text-red-400">{errText}</div>}
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {editing ? (
+          <>
+            <button
+              onClick={saveEdit}
+              disabled={busy}
+              className="py-2 rounded bg-emerald-600 text-white text-xs uppercase tracking-wider font-semibold disabled:opacity-40"
+            >
+              {replaceM.isPending ? "…" : "Save"}
+            </button>
+            <button
+              onClick={() => {
+                setEditing(false);
+                setErrText(null);
+              }}
+              disabled={busy}
+              className="py-2 rounded border border-zinc-700 text-zinc-300 text-xs uppercase tracking-wider disabled:opacity-40"
+            >
+              Cancel edit
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => {
+                setQty(String(order.qty));
+                setLimit(order.limitPrice != null ? order.limitPrice.toFixed(2) : "");
+                setTif(order.timeInForce === "gtc" ? "gtc" : "day");
+                setErrText(null);
+                setEditing(true);
+              }}
+              disabled={busy}
+              className="py-2 rounded border border-zinc-700 text-zinc-200 text-xs uppercase tracking-wider disabled:opacity-40"
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => {
+                if (confirm(`Cancel ${order.side} ${order.qty} ${order.symbol}?`)) {
+                  cancelM.mutate();
+                }
+              }}
+              disabled={busy}
+              className="py-2 rounded border border-red-900/60 text-red-300 bg-red-950/30 text-xs uppercase tracking-wider disabled:opacity-40"
+            >
+              {cancelM.isPending ? "…" : "Cancel order"}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -373,25 +600,102 @@ function PositionsTable({ positions }: { positions: PositionSummary[] }) {
     );
   }
   return (
-    <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
-          <tr>
-            <th className="text-left px-4 py-2">Symbol</th>
-            <th className="text-right px-4 py-2">Qty</th>
-            <th className="text-right px-4 py-2">Avg entry</th>
-            <th className="text-right px-4 py-2">Current</th>
-            <th className="text-right px-4 py-2">Market value</th>
-            <th className="text-right px-4 py-2">Unrealized P&L</th>
-            <th className="text-right px-4 py-2">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="tabular-digits">
-          {positions.map((p) => (
-            <PositionRow key={p.symbol} position={p} />
-          ))}
-        </tbody>
-      </table>
+    <>
+      <div className="sm:hidden space-y-3">
+        {positions.map((p) => (
+          <PositionCard key={p.symbol} position={p} />
+        ))}
+      </div>
+      <div className="hidden sm:block rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
+            <tr>
+              <th className="text-left px-4 py-2">Symbol</th>
+              <th className="text-right px-4 py-2">Qty</th>
+              <th className="text-right px-4 py-2">Avg entry</th>
+              <th className="text-right px-4 py-2">Current</th>
+              <th className="text-right px-4 py-2">Market value</th>
+              <th className="text-right px-4 py-2">Unrealized P&L</th>
+              <th className="text-right px-4 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="tabular-digits">
+            {positions.map((p) => (
+              <PositionRow key={p.symbol} position={p} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function PositionCard({ position: p }: { position: PositionSummary }) {
+  const qc = useQueryClient();
+  const [errText, setErrText] = useState<string | null>(null);
+  const POS_KEY = ["me", "positions"] as const;
+  const closeM = useMutation({
+    mutationFn: () => api.meClosePosition(p.symbol),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: POS_KEY });
+      const prev = qc.getQueryData<{ positions: PositionSummary[] }>(POS_KEY);
+      qc.setQueryData<{ positions: PositionSummary[] } | undefined>(POS_KEY, (old) => {
+        if (!old) return old;
+        return { ...old, positions: old.positions.filter((x) => x.symbol !== p.symbol) };
+      });
+      return { prev };
+    },
+    onSuccess: () => setErrText(null),
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(POS_KEY, ctx.prev);
+      setErrText(err instanceof ApiError ? err.message : "Close failed");
+    },
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: POS_KEY }),
+        qc.invalidateQueries({ queryKey: ["me", "open-orders"] }),
+      ]),
+  });
+  const plColor =
+    p.unrealizedPl > 0 ? "text-emerald-400" : p.unrealizedPl < 0 ? "text-red-400" : "text-zinc-400";
+  return (
+    <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-base font-bold">{p.symbol}</span>
+        <span className={cn("text-sm font-semibold tabular-digits", plColor)}>
+          {fmtUsdSigned(p.unrealizedPl)} ({p.unrealizedPlPct.toFixed(2)}%)
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mt-3 text-xs tabular-digits">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Qty</div>
+          <div className="mt-0.5">{p.qty}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Avg entry</div>
+          <div className="mt-0.5">${p.avgEntry.toFixed(2)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Current</div>
+          <div className="mt-0.5">${p.current.toFixed(2)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Market value</div>
+          <div className="mt-0.5">${p.marketValue.toFixed(2)}</div>
+        </div>
+      </div>
+      {errText && <div className="mt-2 text-[11px] text-red-400">{errText}</div>}
+      <button
+        onClick={() => {
+          if (confirm(`Close full position: ${p.qty} ${p.symbol} at market?`)) {
+            closeM.mutate();
+          }
+        }}
+        disabled={closeM.isPending}
+        className="mt-3 w-full py-2 rounded border border-red-900/60 text-red-300 bg-red-950/30 text-xs uppercase tracking-wider disabled:opacity-40"
+      >
+        {closeM.isPending ? "…" : "Close position"}
+      </button>
     </div>
   );
 }

@@ -49,18 +49,66 @@ export function AppShell() {
 
   const teamHex = TEAM_COLOR_META[user.teamColor]?.hex ?? "#888";
 
-  return (
-    <div className="min-h-screen">
-      <header className="border-b border-[var(--color-race-border)] bg-black/40 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <Link to="/" className="flex items-center gap-3">
-            <div className="text-[10px] tracking-[0.3em] text-zinc-500 uppercase leading-none">
-              Trading
-            </div>
-            <div className="text-lg font-black tracking-tight">GRAND PRIX</div>
-          </Link>
+  const userChipDesktop = (
+    <div className="flex items-center gap-2 rounded border border-zinc-800 bg-black/40 px-2.5 py-1.5">
+      <span className="h-2 w-2 rounded-full" style={{ background: teamHex }} />
+      <span className="text-sm font-semibold">{user.displayName}</span>
+      {user.isAdmin && (
+        <span className="rounded bg-[var(--color-flag-gold)]/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-flag-gold)]">
+          Paddock
+        </span>
+      )}
+    </div>
+  );
 
-          <nav className="flex items-center gap-1 text-xs">
+  const userChipMobile = (
+    <div className="flex items-center gap-1.5 rounded border border-zinc-800 bg-black/40 px-2 py-1">
+      <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: teamHex }} />
+      <span className="text-xs font-semibold truncate max-w-[90px]">{user.displayName}</span>
+    </div>
+  );
+
+  const signoutDesktop = (
+    <button
+      onClick={() => logoutM.mutate()}
+      className="text-xs text-zinc-500 hover:text-zinc-300 uppercase tracking-wider"
+    >
+      Sign out
+    </button>
+  );
+
+  const signoutMobile = (
+    <button
+      onClick={() => logoutM.mutate()}
+      aria-label="Sign out"
+      className="text-[10px] text-zinc-400 uppercase tracking-wider rounded border border-zinc-800 px-2 py-1"
+    >
+      Exit
+    </button>
+  );
+
+  return (
+    <div className="min-h-screen overflow-x-hidden">
+      <header className="border-b border-[var(--color-race-border)] bg-black/40 backdrop-blur">
+        <div className="mx-auto max-w-6xl px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+          {/* Row 1 on mobile: logo + chip + exit. On desktop: just the logo. */}
+          <div className="flex items-center justify-between gap-2 sm:justify-start">
+            <Link to="/" className="flex items-baseline gap-2 min-w-0">
+              <div className="hidden sm:block text-[10px] tracking-[0.3em] text-zinc-500 uppercase leading-none whitespace-nowrap">
+                Trading
+              </div>
+              <div className="text-base sm:text-lg font-black tracking-tight whitespace-nowrap">
+                GRAND PRIX
+              </div>
+            </Link>
+            <div className="flex items-center gap-2 sm:hidden">
+              {userChipMobile}
+              {signoutMobile}
+            </div>
+          </div>
+
+          {/* Row 2 on mobile: nav only, horizontally scrollable. */}
+          <nav className="flex items-center gap-1 text-xs overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 sm:overflow-visible">
             <ShellLink to="/">Leaderboard</ShellLink>
             <ShellLink
               to="/pit-wall"
@@ -74,28 +122,18 @@ export function AppShell() {
             {user.isAdmin && <ShellLink to="/paddock">Paddock</ShellLink>}
           </nav>
 
-          <div className="flex items-center gap-4">
+          {/* Row 3 on mobile: race banner on its own line, full-width but single-line. On desktop: inline. */}
+          <div className="flex items-center gap-4 sm:justify-end sm:flex-1 sm:gap-4">
             <RaceBanner />
-            <div className="flex items-center gap-2 rounded border border-zinc-800 bg-black/40 px-2.5 py-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ background: teamHex }} />
-              <span className="text-sm font-semibold">{user.displayName}</span>
-              {user.isAdmin && (
-                <span className="rounded bg-[var(--color-flag-gold)]/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-flag-gold)]">
-                  Paddock
-                </span>
-              )}
+            <div className="hidden sm:flex items-center gap-4">
+              {userChipDesktop}
+              {signoutDesktop}
             </div>
-            <button
-              onClick={() => logoutM.mutate()}
-              className="text-xs text-zinc-500 hover:text-zinc-300 uppercase tracking-wider"
-            >
-              Sign out
-            </button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-8">
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:py-8">
         <Outlet />
       </main>
     </div>
@@ -121,7 +159,7 @@ function RaceBanner() {
   return (
     <div
       className={cn(
-        "text-xs tabular-digits uppercase tracking-wider px-2 py-1 rounded border",
+        "text-[10px] sm:text-xs tabular-digits uppercase tracking-wider px-2 py-1 rounded border whitespace-nowrap overflow-hidden text-ellipsis",
         r.state === "in_race"
           ? "text-emerald-300 border-emerald-900/60 bg-emerald-950/30"
           : r.state === "post_race"
@@ -150,7 +188,7 @@ function ShellLink({
       onClick={onClick}
       className={({ isActive }) =>
         cn(
-          "rounded px-3 py-1.5 uppercase tracking-wider transition",
+          "rounded px-3 py-1.5 uppercase tracking-wider transition whitespace-nowrap flex-shrink-0",
           isActive ? "bg-zinc-100 text-zinc-900 font-semibold" : "text-zinc-400 hover:text-zinc-200",
         )
       }

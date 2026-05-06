@@ -140,24 +140,24 @@ function LeaderboardRowCard({ row, rank }: { row: LeaderboardRow; rank: number }
 
   return (
     <div
-      className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] px-4 py-3 flex items-center gap-4"
+      className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] px-3 py-3 sm:px-4 flex items-center gap-3 sm:gap-4"
       style={{ borderLeft: `4px solid ${hex}` }}
     >
-      <div className="flex items-center gap-3 min-w-[120px]">
+      <div className="flex items-center gap-2 sm:gap-3 sm:min-w-[120px]">
         <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase">P{rank}</div>
-        <div className="h-2.5 w-2.5 rounded-full" style={{ background: hex }} />
+        <div className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ background: hex }} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-base font-bold truncate">{row.displayName}</div>
+        <div className="text-sm sm:text-base font-bold break-words">{row.displayName}</div>
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">
           {row.teamColor}
         </div>
       </div>
-      <div className="text-right min-w-[140px]">
-        <div className="text-xl font-black tabular-digits">
+      <div className="text-right shrink-0 sm:min-w-[140px]">
+        <div className="text-base sm:text-xl font-black tabular-digits">
           {row.equity != null ? fmtUsd(row.equity) : "—"}
         </div>
-        <div className={cn("text-xs tabular-digits mt-0.5", tone)}>
+        <div className={cn("text-[10px] sm:text-xs tabular-digits mt-0.5", tone)}>
           {change24h != null
             ? `${change24h >= 0 ? "+" : "−"}${fmtUsdAbs(change24h)}${
                 changePct24h != null

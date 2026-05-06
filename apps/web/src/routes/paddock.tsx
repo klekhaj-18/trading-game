@@ -66,14 +66,14 @@ export function PaddockPage() {
             placeholder="e.g. I just saw NVDA gap up premarket — lean into that if it holds the gap."
           />
         </label>
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
           {ROUTINE_SLOTS.map((s) => (
             <button
               key={s}
               onClick={() => fireM.mutate(s)}
               disabled={fireM.isPending}
               className={cn(
-                "rounded border border-zinc-700 bg-black/40 px-3 py-2 text-xs tracking-wider uppercase",
+                "rounded border border-zinc-700 bg-black/40 px-3 py-2 text-xs tracking-wider uppercase whitespace-nowrap",
                 "hover:border-zinc-500 disabled:opacity-40",
               )}
             >
@@ -81,12 +81,12 @@ export function PaddockPage() {
             </button>
           ))}
         </div>
-        <div className="mt-3 flex items-center justify-between text-[10px] text-zinc-600">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-[10px] text-zinc-600">
           <span>Haiku 4.5 · validation layer on · orders land in your paper account</span>
           <button
             onClick={() => resetM.mutate()}
             disabled={resetM.isPending || !runsQ.data?.runs.length}
-            className="underline hover:text-zinc-400 disabled:opacity-40"
+            className="underline hover:text-zinc-400 disabled:opacity-40 text-left sm:text-right"
           >
             Reset admin_test data
           </button>
