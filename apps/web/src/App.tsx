@@ -5,6 +5,7 @@ import { PlaybookPage } from "./routes/playbook";
 import { PaddockPage } from "./routes/paddock";
 import { PitWallPage } from "./routes/pit-wall";
 import { LeaderboardPage } from "./routes/leaderboard";
+import { InfoPage } from "./routes/info";
 import { AppShell } from "./routes/app-shell";
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
         <Route path="/" element={<LeaderboardPage />} />
         <Route path="/pit-wall" element={<PitWallPage />} />
         <Route path="/playbook" element={<PlaybookPage />} />
+        <Route path="/info" element={<InfoPage />} />
         <Route path="/paddock" element={<PaddockPage />} />
       </Route>
     </Routes>

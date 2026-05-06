@@ -21,6 +21,7 @@ export function PitWallPage() {
   const ordersQ = useQuery({ queryKey: ["me", "open-orders"], queryFn: api.meOpenOrders, refetchInterval: 30_000 });
   const intentsQ = useQuery({ queryKey: ["me", "intents"], queryFn: api.meIntents, refetchInterval: 60_000 });
   const pnlQ = useQuery({ queryKey: ["me", "pnl-split"], queryFn: api.mePnlSplit, refetchInterval: 60_000 });
+  const raceQ = useQuery({ queryKey: ["race"], queryFn: api.raceState, refetchInterval: 60_000 });
   const equityQ = useQuery({
     queryKey: ["me", "equity", range],
     queryFn: () => api.meEquitySeries(range),
@@ -117,6 +118,8 @@ export function PitWallPage() {
       <IntentsSection
         pending={intentsQ.data?.pending ?? []}
         recent={intentsQ.data?.recent ?? []}
+        hasRunningRoutine={(runsQ.data?.runs ?? []).some((r) => r.status === "running")}
+        raceState={raceQ.data?.state ?? null}
       />
 
       <div>
@@ -1074,8 +1077,23 @@ function PnlSplitRow({
   );
 }
 
-function IntentsSection({ pending, recent }: { pending: IntentSummary[]; recent: IntentSummary[] }) {
+function IntentsSection({
+  pending,
+  recent,
+  hasRunningRoutine,
+  raceState,
+}: {
+  pending: IntentSummary[];
+  recent: IntentSummary[];
+  hasRunningRoutine: boolean;
+  raceState: "pre_race" | "in_race" | "post_race" | null;
+}) {
   const [showComposer, setShowComposer] = useState(false);
+  const [firedRunId, setFiredRunId] = useState<string | null>(null);
+  const [quotaAfterFire, setQuotaAfterFire] = useState<{
+    hourRemaining: number;
+    dayRemaining: number;
+  } | null>(null);
   return (
     <div>
       <div className="flex items-baseline justify-between mb-3">
@@ -1087,7 +1105,21 @@ function IntentsSection({ pending, recent }: { pending: IntentSummary[]; recent:
           {showComposer ? "Cancel" : "+ I want…"}
         </button>
       </div>
-      {showComposer && <IntentComposer onDone={() => setShowComposer(false)} />}
+      {showComposer && (
+        <IntentComposer
+          onDone={() => setShowComposer(false)}
+          hasRunningRoutine={hasRunningRoutine}
+          raceState={raceState}
+          quotaAfterFire={quotaAfterFire}
+          onFiredImmediately={(runId, quota) => {
+            setFiredRunId(runId);
+            setQuotaAfterFire(quota);
+          }}
+        />
+      )}
+      {firedRunId && (
+        <FireResultCard runId={firedRunId} onDismiss={() => setFiredRunId(null)} />
+      )}
       {pending.length > 0 && (
         <div className="space-y-2 mb-3">
           {pending.map((it) => (
@@ -1095,7 +1127,7 @@ function IntentsSection({ pending, recent }: { pending: IntentSummary[]; recent:
           ))}
         </div>
       )}
-      {pending.length === 0 && !showComposer && (
+      {pending.length === 0 && !showComposer && !firedRunId && (
         <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] text-xs text-zinc-500 text-center py-6">
           No pending intents. Add one to override the strategy for a single trade.
         </div>
@@ -1112,28 +1144,151 @@ function IntentsSection({ pending, recent }: { pending: IntentSummary[]; recent:
   );
 }
 
-function IntentComposer({ onDone }: { onDone: () => void }) {
+function FireResultCard({ runId, onDismiss }: { runId: string; onDismiss: () => void }) {
+  const qc = useQueryClient();
+  const runQ = useQuery({
+    queryKey: ["me", "routine-run", runId],
+    queryFn: () => api.meRoutineRun(runId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.run.status;
+      return status && status !== "running" ? false : 1500;
+    },
+  });
+  const run = runQ.data?.run;
+  const status = run?.status ?? "running";
+  const isTerminal = status !== "running";
+
+  // When the routine finishes, refresh data the result might have changed.
+  useEffect(() => {
+    if (isTerminal) {
+      qc.invalidateQueries({ queryKey: ["me", "open-orders"] });
+      qc.invalidateQueries({ queryKey: ["me", "positions"] });
+      qc.invalidateQueries({ queryKey: ["me", "routine-runs"] });
+      qc.invalidateQueries({ queryKey: ["me", "intents"] });
+    }
+  }, [isTerminal, qc]);
+
+  const statusClass =
+    status === "succeeded"
+      ? "text-emerald-300 border-emerald-500/40 bg-emerald-500/5"
+      : status === "partial"
+        ? "text-amber-300 border-amber-500/40 bg-amber-500/5"
+        : status === "validation_failed" || status === "error"
+          ? "text-red-300 border-red-500/40 bg-red-500/5"
+          : "text-blue-300 border-blue-500/40 bg-blue-500/5";
+
+  return (
+    <div className={cn("rounded-lg border p-3 mb-3", statusClass)}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider font-bold">
+            {status === "running" ? "Box, box…" : `Routine ${status}`}
+          </span>
+          {run?.scheduledSlot && (
+            <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+              {run.scheduledSlot}
+            </span>
+          )}
+          {run && run.orders.length > 0 && (
+            <span className="text-[10px] text-emerald-300">
+              {run.orders.length} order{run.orders.length === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onDismiss}
+          className="text-[10px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+        >
+          Dismiss
+        </button>
+      </div>
+      {status === "running" && (
+        <div className="mt-2 text-xs text-zinc-400">
+          Claude is reading your plan and the latest market state. This usually takes 5–15s.
+        </div>
+      )}
+      {runQ.error instanceof ApiError && (
+        <div className="mt-2 text-xs text-red-300">
+          Couldn't fetch routine status: {runQ.error.message}. The routine may still complete in
+          the background.
+        </div>
+      )}
+      {run?.errorText && (
+        <div className="mt-2 text-xs text-red-300">{run.errorText}</div>
+      )}
+      {run?.claudeReasoning && (
+        <div className="mt-2 text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed">
+          {run.claudeReasoning}
+        </div>
+      )}
+      {run && run.validationFailures.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {run.validationFailures.slice(0, 5).map((f, i) => (
+            <div key={i} className="text-[11px] text-red-300/90">
+              {f.symbol}: {f.reason}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IntentComposer({
+  onDone,
+  hasRunningRoutine,
+  raceState,
+  quotaAfterFire,
+  onFiredImmediately,
+}: {
+  onDone: () => void;
+  hasRunningRoutine: boolean;
+  raceState: "pre_race" | "in_race" | "post_race" | null;
+  quotaAfterFire: { hourRemaining: number; dayRemaining: number } | null;
+  onFiredImmediately: (
+    runId: string,
+    quota: { hourRemaining: number; dayRemaining: number },
+  ) => void;
+}) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const [binding, setBinding] = useState(true);
   const [ttlHours, setTtlHours] = useState("24");
+  const [fireImmediately, setFireImmediately] = useState(false);
 
   const placeM = useMutation({
     mutationFn: () =>
       api.meCreateIntent({
         text: text.trim(),
-        bindingNextSlot: binding,
-        ttlHours: binding ? 24 : Math.max(1, Math.min(72, Number(ttlHours) || 24)),
+        bindingNextSlot: fireImmediately ? true : binding,
+        ttlHours: binding || fireImmediately ? 24 : Math.max(1, Math.min(72, Number(ttlHours) || 24)),
+        fireImmediately,
       }),
-    onSuccess: async () => {
+    onSuccess: async (resp) => {
       setText("");
       await qc.invalidateQueries({ queryKey: ["me", "intents"] });
+      if (resp.fireNow) {
+        onFiredImmediately(resp.fireNow.runId, {
+          hourRemaining: resp.fireNow.rateLimit.hourRemaining,
+          dayRemaining: resp.fireNow.rateLimit.dayRemaining,
+        });
+        await qc.invalidateQueries({ queryKey: ["me", "routine-runs"] });
+      }
       onDone();
     },
   });
 
   const err = placeM.error as ApiError | null;
-  const canSubmit = text.trim().length >= 3;
+  const fireBlockedReason: string | null = !fireImmediately
+    ? null
+    : raceState !== "in_race"
+      ? raceState === "pre_race"
+        ? "Available once the race starts"
+        : "Race is over"
+      : hasRunningRoutine
+        ? "A routine is already running"
+        : null;
+  const canSubmit = text.trim().length >= 3 && !fireBlockedReason;
 
   return (
     <div className="rounded-lg border border-blue-500/40 bg-blue-500/5 p-3 mb-3 space-y-3">
@@ -1149,24 +1304,37 @@ function IntentComposer({ onDone }: { onDone: () => void }) {
       />
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <button
-          onClick={() => setBinding(true)}
+          onClick={() => {
+            setBinding(true);
+            if (fireImmediately) {
+              /* keep fire-immediately on; binding becomes implied */
+            }
+          }}
+          disabled={fireImmediately}
           className={cn(
             "rounded px-2 py-1 uppercase tracking-wider text-[10px]",
-            binding ? "bg-blue-500/30 text-blue-100 border border-blue-400" : "border border-zinc-700 text-zinc-400",
+            binding || fireImmediately
+              ? "bg-blue-500/30 text-blue-100 border border-blue-400"
+              : "border border-zinc-700 text-zinc-400",
+            fireImmediately && "opacity-60 cursor-not-allowed",
           )}
         >
           Binding (next slot)
         </button>
         <button
           onClick={() => setBinding(false)}
+          disabled={fireImmediately}
           className={cn(
             "rounded px-2 py-1 uppercase tracking-wider text-[10px]",
-            !binding ? "bg-blue-500/30 text-blue-100 border border-blue-400" : "border border-zinc-700 text-zinc-400",
+            !binding && !fireImmediately
+              ? "bg-blue-500/30 text-blue-100 border border-blue-400"
+              : "border border-zinc-700 text-zinc-400",
+            fireImmediately && "opacity-40 cursor-not-allowed",
           )}
         >
           Standing
         </button>
-        {!binding && (
+        {!binding && !fireImmediately && (
           <div className="flex items-center gap-1.5">
             <span className="text-zinc-500">TTL</span>
             <input
@@ -1179,6 +1347,30 @@ function IntentComposer({ onDone }: { onDone: () => void }) {
           </div>
         )}
       </div>
+      <div className="flex items-start gap-2 rounded border border-blue-400/30 bg-blue-500/5 p-2">
+        <input
+          id="fire-immediately"
+          type="checkbox"
+          checked={fireImmediately}
+          onChange={(e) => setFireImmediately(e.target.checked)}
+          className="mt-0.5 accent-blue-400"
+        />
+        <label htmlFor="fire-immediately" className="text-xs text-zinc-300 cursor-pointer flex-1">
+          <span className="font-semibold text-blue-100">Fire immediately</span>{" "}
+          <span className="text-zinc-500">
+            — also kick off a routine right now (5/hour, 15/day; race must be live).
+          </span>
+          {quotaAfterFire && (
+            <span className="ml-1 text-[11px] text-zinc-400">
+              · {quotaAfterFire.hourRemaining} left this hour ·{" "}
+              {quotaAfterFire.dayRemaining} today
+            </span>
+          )}
+          {fireBlockedReason && (
+            <span className="ml-1 text-[11px] text-amber-300">· {fireBlockedReason}</span>
+          )}
+        </label>
+      </div>
       <div className="flex items-center justify-between gap-3">
         <div className="text-[11px] text-red-400 min-h-[1em]">{err ? err.message : ""}</div>
         <button
@@ -1186,7 +1378,13 @@ function IntentComposer({ onDone }: { onDone: () => void }) {
           disabled={!canSubmit || placeM.isPending}
           className="text-xs rounded border border-blue-400 bg-blue-500/20 px-3 py-1.5 uppercase tracking-wider font-semibold text-blue-100 hover:bg-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {placeM.isPending ? "Submitting…" : "Submit intent"}
+          {placeM.isPending
+            ? fireImmediately
+              ? "Firing…"
+              : "Submitting…"
+            : fireImmediately
+              ? "Submit & fire"
+              : "Submit intent"}
         </button>
       </div>
     </div>

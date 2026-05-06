@@ -7,7 +7,12 @@ import type {
   PlanSummary,
 } from "shared/playbook";
 import type { CoachChatResponse, CoachMessage, CoachPlanRevision } from "shared/coach";
-import type { CreateIntentInput, IntentSummary, IntentsListResponse } from "shared/intent";
+import type {
+  CreateIntentInput,
+  CreateIntentResponse,
+  IntentSummary,
+  IntentsListResponse,
+} from "shared/intent";
 import type { PnlSplitResponse } from "shared/pnl";
 import type {
   FireTestRoutineInput,
@@ -244,10 +249,13 @@ export const api = {
   meIntents: () => request<IntentsListResponse>("/api/me/intents"),
 
   meCreateIntent: (input: CreateIntentInput) =>
-    request<{ ok: true; intent: IntentSummary }>("/api/me/intents", {
+    request<CreateIntentResponse>("/api/me/intents", {
       method: "POST",
       body: JSON.stringify(input),
     }),
+
+  meRoutineRun: (id: string) =>
+    request<{ run: RoutineRunSummary }>(`/api/me/routine-runs/${encodeURIComponent(id)}`),
 
   meCancelIntent: (id: string) =>
     request<{ ok: true }>(`/api/me/intents/${id}`, { method: "DELETE" }),

@@ -96,3 +96,52 @@ export const fireTestRoutineSchema = z.object({
   oneShotInstruction: z.string().trim().max(2000).optional(),
 });
 export type FireTestRoutineInput = z.infer<typeof fireTestRoutineSchema>;
+
+export const FIRE_NOW_HOURLY_LIMIT = 5;
+export const FIRE_NOW_DAILY_LIMIT = 15;
+
+export interface FireNowResponse {
+  runId: string;
+  slot: RoutineSlot;
+  rateLimit: {
+    hourRemaining: number;
+    dayRemaining: number;
+    hourResetAt: number;
+    dayResetAt: number;
+  };
+}
+
+/**
+ * Pick an executable trading slot from a wall-clock time. Used by fire-now to
+ * decide which slot context the routine runs in. Outside trading hours and on
+ * weekends, fall through to "close" so Claude reasons in end-of-day mode.
+ *
+ * Hours are in US Eastern; caller passes `nowUtcSec` and we convert.
+ */
+export function deriveFireNowSlot(nowUtcSec: number): RoutineSlot {
+  const d = new Date(nowUtcSec * 1000);
+  // Compute Eastern minutes-of-day. Cloudflare Workers don't expose Intl
+  // timezone offsets reliably across all runtimes, so use the well-known
+  // -5 (EST) / -4 (EDT) heuristic via Date#toLocaleString.
+  const etString = d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  // etString example: "Mon, 14:32"
+  const dayMatch = etString.match(/^([A-Za-z]+)/);
+  const timeMatch = etString.match(/(\d{1,2}):(\d{2})/);
+  if (!dayMatch || !timeMatch) return "close";
+  const day = dayMatch[1];
+  if (day === "Sat" || day === "Sun") return "close";
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const minutes = hour * 60 + minute;
+  if (minutes < 9 * 60 + 30) return "premarket";
+  if (minutes < 10 * 60 + 30) return "open";
+  if (minutes < 13 * 60) return "midmorning";
+  if (minutes < 15 * 60 + 30) return "afternoon";
+  return "close";
+}

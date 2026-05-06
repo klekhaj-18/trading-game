@@ -24,6 +24,13 @@ export interface ExecuteRoutineInput {
   slot: RoutineSlot;
   kind: RoutineKind;
   oneShotInstruction?: string;
+  /**
+   * Pre-allocated run id. When provided, the executor expects a routine_runs
+   * row to already exist for this id (status="running") and will UPDATE that
+   * row instead of inserting a new one. Used by fire-now so the route can
+   * return the runId immediately and the work runs in ctx.waitUntil.
+   */
+  existingRunId?: string;
 }
 
 export interface ExecuteRoutineResult {
@@ -44,23 +51,34 @@ export interface ExecuteRoutineResult {
 
 export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Promise<ExecuteRoutineResult> {
   const db = getDb(env.DB);
-  const runId = ulid();
+  const runId = input.existingRunId ?? ulid();
+  const preExisting = input.existingRunId != null;
   const startedAt = Math.floor(Date.now() / 1000);
 
-  const [userRow] = await db.select().from(users).where(eq(users.id, input.userId)).limit(1);
-  if (!userRow) throw new Error("user_not_found");
-  if (!userRow.alpacaKeyCiphertext || !userRow.alpacaKeyIv || !userRow.alpacaSecretCiphertext || !userRow.alpacaSecretIv) {
-    await db.insert(routineRuns).values({
-      id: runId,
-      userId: input.userId,
-      operationalPlanId: null,
-      kind: input.kind,
-      scheduledSlot: input.slot,
-      oneShotInstruction: input.oneShotInstruction ?? null,
-      status: "error",
-      errorText: "Alpaca account not linked",
-      completedAt: startedAt,
-    });
+  const earlyError = async (errorText: string, planId: string | null): Promise<ExecuteRoutineResult> => {
+    if (preExisting) {
+      await db
+        .update(routineRuns)
+        .set({
+          operationalPlanId: planId,
+          status: "error",
+          errorText,
+          completedAt: Math.floor(Date.now() / 1000),
+        })
+        .where(eq(routineRuns.id, runId));
+    } else {
+      await db.insert(routineRuns).values({
+        id: runId,
+        userId: input.userId,
+        operationalPlanId: planId,
+        kind: input.kind,
+        scheduledSlot: input.slot,
+        oneShotInstruction: input.oneShotInstruction ?? null,
+        status: "error",
+        errorText,
+        completedAt: startedAt,
+      });
+    }
     return {
       runId,
       status: "error",
@@ -68,9 +86,15 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
       validationFailures: [],
       orders: [],
       reasoning: null,
-      errorText: "Alpaca account not linked",
+      errorText,
       usage: { input: null, output: null, cacheRead: null, cacheWrite: null },
     };
+  };
+
+  const [userRow] = await db.select().from(users).where(eq(users.id, input.userId)).limit(1);
+  if (!userRow) throw new Error("user_not_found");
+  if (!userRow.alpacaKeyCiphertext || !userRow.alpacaKeyIv || !userRow.alpacaSecretCiphertext || !userRow.alpacaSecretIv) {
+    return earlyError("Alpaca account not linked", null);
   }
 
   const [approvedPlan] = await db
@@ -81,38 +105,26 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
     .limit(1);
 
   if (!approvedPlan) {
+    return earlyError("No approved operational plan", null);
+  }
+
+  if (preExisting) {
+    // Stub row already exists with status="running"; just attach the plan id.
+    await db
+      .update(routineRuns)
+      .set({ operationalPlanId: approvedPlan.id })
+      .where(eq(routineRuns.id, runId));
+  } else {
     await db.insert(routineRuns).values({
       id: runId,
       userId: input.userId,
-      operationalPlanId: null,
+      operationalPlanId: approvedPlan.id,
       kind: input.kind,
       scheduledSlot: input.slot,
       oneShotInstruction: input.oneShotInstruction ?? null,
-      status: "error",
-      errorText: "No approved operational plan",
-      completedAt: startedAt,
+      status: "running",
     });
-    return {
-      runId,
-      status: "error",
-      decisions: null,
-      validationFailures: [],
-      orders: [],
-      reasoning: null,
-      errorText: "No approved operational plan",
-      usage: { input: null, output: null, cacheRead: null, cacheWrite: null },
-    };
   }
-
-  await db.insert(routineRuns).values({
-    id: runId,
-    userId: input.userId,
-    operationalPlanId: approvedPlan.id,
-    kind: input.kind,
-    scheduledSlot: input.slot,
-    oneShotInstruction: input.oneShotInstruction ?? null,
-    status: "running",
-  });
 
   try {
     const apiKey = await open(
