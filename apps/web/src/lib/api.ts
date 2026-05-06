@@ -59,6 +59,22 @@ export interface EquityPoint {
 
 export interface RoutineRunSummary extends AdminTestRun {}
 
+export interface RosterPlayer {
+  id: string;
+  displayName: string;
+  teamColor: string;
+  isAdmin: boolean;
+  alpacaLinked: boolean;
+  planState: "approved" | "pending" | "rejected" | "superseded" | "none";
+  joinedAtSec: number;
+  onboardedAtSec: number | null;
+}
+
+export interface RosterResponse {
+  players: RosterPlayer[];
+  maxPlayers: 4;
+}
+
 export interface AdminTestRun {
   id: string;
   kind: RoutineKind;
@@ -183,6 +199,8 @@ export const api = {
     }),
 
   adminTestRuns: () => request<{ runs: AdminTestRun[] }>("/api/admin/test-runs"),
+
+  adminRoster: () => request<RosterResponse>("/api/admin/roster"),
 
   resetAdminTestData: () =>
     request<{ ok: true }>("/api/admin/reset-admin-test-data", { method: "POST" }),

@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { fireTestRoutineSchema } from "shared/routine";
 import { z } from "zod";
 import { getDb } from "../db/client";
-import { routineRuns, trades, users } from "../db/schema";
+import { operationalPlans, routineRuns, trades, users } from "../db/schema";
 import { executeRoutine } from "../routines/execute";
 import { captureEquitySnapshots, handleScheduled } from "../routines/cron";
 import { placeOrder, fetchOrder, type AlpacaCreds } from "../lib/alpaca";
@@ -46,6 +46,49 @@ adminRoutes.post(
     return c.json(result);
   },
 );
+
+adminRoutes.get("/roster", async (c) => {
+  const db = getDb(c.env.DB);
+  const rows = await db
+    .select({
+      id: users.id,
+      displayName: users.displayName,
+      teamColor: users.teamColor,
+      alpacaKeyCiphertext: users.alpacaKeyCiphertext,
+      createdAt: users.createdAt,
+      onboardedAt: users.onboardedAt,
+    })
+    .from(users)
+    .orderBy(asc(users.createdAt));
+
+  const players = await Promise.all(
+    rows.map(async (u) => {
+      const [latestPlan] = await db
+        .select({ approvalState: operationalPlans.approvalState })
+        .from(operationalPlans)
+        .where(eq(operationalPlans.userId, u.id))
+        .orderBy(desc(operationalPlans.createdAt))
+        .limit(1);
+      return {
+        id: u.id,
+        displayName: u.displayName,
+        teamColor: u.teamColor,
+        isAdmin: u.displayName === c.env.ADMIN_DISPLAY_NAME,
+        alpacaLinked: u.alpacaKeyCiphertext != null,
+        planState: (latestPlan?.approvalState ?? "none") as
+          | "approved"
+          | "pending"
+          | "rejected"
+          | "superseded"
+          | "none",
+        joinedAtSec: u.createdAt,
+        onboardedAtSec: u.onboardedAt,
+      };
+    }),
+  );
+
+  return c.json({ players, maxPlayers: 4 as const });
+});
 
 adminRoutes.get("/test-runs", async (c) => {
   const user = c.get("user");
