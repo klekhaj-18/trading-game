@@ -9,6 +9,7 @@
     "dev": "concurrently -n worker,web -c magenta,cyan \"pnpm dev:worker\" \"pnpm dev:web\"",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "ship": "pnpm --filter web build && pnpm --filter worker exec wrangler deploy",
     "db:generate": "pnpm --filter worker db:generate",
     "db:migrate:local": "pnpm --filter worker db:migrate:local",
     "db:studio": "pnpm --filter worker db:studio"

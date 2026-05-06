@@ -30,7 +30,13 @@ app.route("/api/race", raceRoutes);
 app.route("/api/leaderboard", leaderboardRoutes);
 app.route("/api/events", eventsRoutes);
 
-app.notFound((c) => c.json({ error: "not_found" }, 404));
+app.notFound((c) => {
+  const url = new URL(c.req.url);
+  if (url.pathname.startsWith("/api/")) {
+    return c.json({ error: "not_found" }, 404);
+  }
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 app.onError((err, c) => {
   console.error("worker error", err);
   return c.json({ error: "internal_error" }, 500);

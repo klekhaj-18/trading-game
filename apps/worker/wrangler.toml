@@ -8,28 +8,34 @@ workers_dev = true
 enabled = true
 
 [vars]
-APP_ORIGIN = "http://localhost:5180"
+APP_ORIGIN = "https://trading-grand-prix.klekhaj.workers.dev"
 ADMIN_DISPLAY_NAME = "Lekhaj"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "trading-grand-prix-db"
-database_id = "local-placeholder-replace-before-remote-deploy"
+database_id = "c36c5419-1325-4e35-a673-fefd5c92fd3c"
 migrations_dir = "migrations"
 
 [[kv_namespaces]]
 binding = "CACHE"
-id = "local-placeholder-replace-before-remote-deploy"
+id = "773843ac37a24327ba7da97239fbdfa3"
 
-# Cron triggers are staged here but handlers no-op until Phase 3 wires them up.
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+# 5 routine slots (Mon-Fri, UTC matches US EDT during DST).
+# Equity snapshots piggyback on each slot via handleScheduled -> captureEquitySnapshots.
 [triggers]
 crons = [
   "15 13 * * 1-5",
   "35 13 * * 1-5",
   "30 15 * * 1-5",
   "0 18 * * 1-5",
-  "45 19 * * 1-5",
-  "*/5 13-20 * * 1-5"
+  "45 19 * * 1-5"
 ]
 
 [dev]
