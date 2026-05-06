@@ -42,6 +42,38 @@ export interface OperationalPlan {
   markdown_summary: string;
 }
 
+export const operationalPlanSchema = z.object({
+  universe: z
+    .array(z.object({ symbol: z.string().min(1).max(8), rationale: z.string().max(500) }))
+    .min(1)
+    .max(40),
+  entry_rules: z.array(z.object({ condition: z.string().max(800), action: z.string().max(800) })).min(1),
+  exit_rules: z.array(z.object({ condition: z.string().max(800), action: z.string().max(800) })).min(1),
+  sizing: z.object({
+    position_size_pct: z.number().positive().max(25),
+    max_positions: z.number().int().positive().max(40),
+    concentration_cap_pct: z.number().positive().max(25),
+  }),
+  risk: z.object({
+    max_daily_loss_pct: z.number().positive().max(100),
+    stop_loss_pct: z.number().positive().max(100),
+    take_profit_pct: z.number().positive().max(1000),
+  }),
+  per_slot_emphasis: z.object({
+    premarket: z.string().max(2000),
+    open: z.string().max(2000),
+    midmorning: z.string().max(2000),
+    afternoon: z.string().max(2000),
+    close: z.string().max(2000),
+  }),
+  markdown_summary: z.string().max(8000),
+});
+
+export const proposePlanSchema = z.object({
+  plan: operationalPlanSchema,
+  rationale: z.string().min(1).max(2000),
+});
+
 export interface PlaybookVersionSummary {
   id: string;
   version: number;

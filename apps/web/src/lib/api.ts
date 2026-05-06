@@ -6,7 +6,7 @@ import type {
   PlaybookDraftInput,
   PlanSummary,
 } from "shared/playbook";
-import type { CoachChatResponse, CoachMessage } from "shared/coach";
+import type { CoachChatResponse, CoachMessage, CoachPlanRevision } from "shared/coach";
 import type { CreateIntentInput, IntentSummary, IntentsListResponse } from "shared/intent";
 import type { PnlSplitResponse } from "shared/pnl";
 import type {
@@ -153,6 +153,12 @@ export const api = {
     request<{ ok: true }>(`/api/playbook/plan/${planId}/reject`, {
       method: "POST",
       body: JSON.stringify({ reason }),
+    }),
+
+  proposePlan: (input: CoachPlanRevision) =>
+    request<{ plan: PlanSummary }>("/api/playbook/propose-plan", {
+      method: "POST",
+      body: JSON.stringify(input),
     }),
 
   coachChat: (messages: CoachMessage[]) =>

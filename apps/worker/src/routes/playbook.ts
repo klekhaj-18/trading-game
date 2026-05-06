@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
-import { playbookInputSchema, rejectPlanSchema } from "shared/playbook";
+import { playbookInputSchema, proposePlanSchema, rejectPlanSchema } from "shared/playbook";
 import { getDb } from "../db/client";
 import { operationalPlans, playbooks, users } from "../db/schema";
 import { ulid } from "../lib/ids";
@@ -148,6 +148,53 @@ playbookRoutes.post("/", zValidator("json", playbookInputSchema), async (c) => {
       rejectedReason: null,
     },
     usage: result.usage,
+  });
+});
+
+playbookRoutes.post("/propose-plan", zValidator("json", proposePlanSchema), async (c) => {
+  const user = c.get("user");
+  const { plan, rationale } = c.req.valid("json");
+  const db = getDb(c.env.DB);
+
+  const [latestPlaybook] = await db
+    .select({ id: playbooks.id, version: playbooks.version })
+    .from(playbooks)
+    .where(eq(playbooks.userId, user.id))
+    .orderBy(desc(playbooks.version))
+    .limit(1);
+  if (!latestPlaybook) {
+    return c.json({ error: "no_playbook", message: "Submit a playbook first." }, 400);
+  }
+
+  await db
+    .update(operationalPlans)
+    .set({ approvalState: "superseded" })
+    .where(and(eq(operationalPlans.userId, user.id), eq(operationalPlans.approvalState, "pending")));
+
+  const planId = ulid();
+  const markdown = `${plan.markdown_summary}\n\n---\n\n_Coach revision rationale: ${rationale}_`;
+  await db.insert(operationalPlans).values({
+    id: planId,
+    userId: user.id,
+    playbookId: latestPlaybook.id,
+    planJson: JSON.stringify(plan),
+    planMarkdown: markdown,
+    claudeModel: "coach-revision",
+    approvalState: "pending",
+  });
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  return c.json({
+    plan: {
+      id: planId,
+      approvalState: "pending" as const,
+      claudeModel: "coach-revision",
+      planMarkdown: markdown,
+      planJson: plan,
+      createdAt: nowSec,
+      approvedAt: null,
+      rejectedReason: null,
+    },
   });
 });
 
