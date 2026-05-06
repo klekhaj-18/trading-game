@@ -10,6 +10,12 @@ export interface LeaderboardRow {
   equity24hAgo: number | null;
   equity7dAgo: number | null;
   lastUpdatedAt: number | null;
+  /** Net realized cash flow from AI-mediated trades (sell notional - buy notional). */
+  strategyNetRealized: number;
+  /** Net realized cash flow from direct (discretionary) trades. */
+  directNetRealized: number;
+  strategyTradeCount: number;
+  directTradeCount: number;
 }
 
 export interface LeaderboardResponse {

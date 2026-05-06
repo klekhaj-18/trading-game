@@ -8,6 +8,7 @@ import type {
 } from "shared/playbook";
 import type { CoachChatResponse, CoachMessage } from "shared/coach";
 import type { CreateIntentInput, IntentSummary, IntentsListResponse } from "shared/intent";
+import type { PnlSplitResponse } from "shared/pnl";
 import type {
   FireTestRoutineInput,
   HaikuDecision,
@@ -226,6 +227,8 @@ export const api = {
 
   meCancelIntent: (id: string) =>
     request<{ ok: true }>(`/api/me/intents/${id}`, { method: "DELETE" }),
+
+  mePnlSplit: () => request<PnlSplitResponse>("/api/me/pnl-split"),
 
   meClosePosition: (symbol: string) =>
     request<{ ok: true }>(`/api/me/positions/${encodeURIComponent(symbol)}`, {

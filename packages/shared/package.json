@@ -13,7 +13,8 @@
     "./routine": "./src/routine.ts",
     "./race": "./src/race.ts",
     "./leaderboard": "./src/leaderboard.ts",
-    "./intent": "./src/intent.ts"
+    "./intent": "./src/intent.ts",
+    "./pnl": "./src/pnl.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

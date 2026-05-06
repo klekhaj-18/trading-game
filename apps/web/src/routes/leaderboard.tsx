@@ -166,9 +166,26 @@ function LeaderboardRowCard({ row, rank }: { row: LeaderboardRow; rank: number }
               }`
             : "no 24h data"}
         </div>
+        {(row.strategyTradeCount > 0 || row.directTradeCount > 0) && (
+          <div className="text-[9px] sm:text-[10px] tabular-digits text-zinc-500 mt-0.5">
+            <span>AI {fmtSignedShort(row.strategyNetRealized)} ({row.strategyTradeCount})</span>
+            {" · "}
+            <span className={row.directTradeCount > 0 ? "text-amber-400/70" : ""}>
+              Direct {fmtSignedShort(row.directNetRealized)} ({row.directTradeCount})
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function fmtSignedShort(n: number): string {
+  if (n === 0) return "$0";
+  const sign = n > 0 ? "+" : "−";
+  const abs = Math.abs(n);
+  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
+  return `${sign}$${abs.toFixed(0)}`;
 }
 
 function TopBanner({ raceState }: { raceState: Awaited<ReturnType<typeof api.raceState>> | undefined }) {

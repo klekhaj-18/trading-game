@@ -20,6 +20,7 @@ export function PitWallPage() {
   const posQ = useQuery({ queryKey: ["me", "positions"], queryFn: api.mePositions, refetchInterval: 30_000 });
   const ordersQ = useQuery({ queryKey: ["me", "open-orders"], queryFn: api.meOpenOrders, refetchInterval: 30_000 });
   const intentsQ = useQuery({ queryKey: ["me", "intents"], queryFn: api.meIntents, refetchInterval: 60_000 });
+  const pnlQ = useQuery({ queryKey: ["me", "pnl-split"], queryFn: api.mePnlSplit, refetchInterval: 60_000 });
   const equityQ = useQuery({
     queryKey: ["me", "equity", range],
     queryFn: () => api.meEquitySeries(range),
@@ -60,6 +61,13 @@ export function PitWallPage() {
           tone={dayPl > 0 ? "up" : dayPl < 0 ? "down" : "flat"}
         />
       </div>
+
+      <PnlSplitRow
+        strategyNet={pnlQ.data?.strategy.netRealized ?? 0}
+        strategyCount={pnlQ.data?.strategy.tradeCount ?? 0}
+        directNet={pnlQ.data?.direct.netRealized ?? 0}
+        directCount={pnlQ.data?.direct.tradeCount ?? 0}
+      />
 
       <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-4">
         <div className="flex items-baseline justify-between mb-3">
@@ -1029,6 +1037,38 @@ function DirectOrderComposer({ onDone }: { onDone: () => void }) {
         >
           {placeM.isPending ? "Placing…" : `Place ${side}`}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function PnlSplitRow({
+  strategyNet,
+  strategyCount,
+  directNet,
+  directCount,
+}: {
+  strategyNet: number;
+  strategyCount: number;
+  directNet: number;
+  directCount: number;
+}) {
+  if (strategyCount === 0 && directCount === 0) return null;
+  return (
+    <div className="grid grid-cols-2 gap-2 text-xs">
+      <div className="rounded border border-zinc-800 bg-[var(--color-race-panel)] px-3 py-2">
+        <div className="text-[10px] tracking-wider text-zinc-500 uppercase">AI strategy</div>
+        <div className={cn("font-semibold tabular-digits", strategyNet > 0 ? "text-emerald-400" : strategyNet < 0 ? "text-red-400" : "text-zinc-300")}>
+          {fmtUsdSigned(strategyNet)}
+        </div>
+        <div className="text-[10px] text-zinc-500">{strategyCount} trade{strategyCount === 1 ? "" : "s"}</div>
+      </div>
+      <div className="rounded border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+        <div className="text-[10px] tracking-wider text-amber-400 uppercase">Discretionary</div>
+        <div className={cn("font-semibold tabular-digits", directNet > 0 ? "text-emerald-400" : directNet < 0 ? "text-red-400" : "text-zinc-300")}>
+          {fmtUsdSigned(directNet)}
+        </div>
+        <div className="text-[10px] text-zinc-500">{directCount} trade{directCount === 1 ? "" : "s"}</div>
       </div>
     </div>
   );

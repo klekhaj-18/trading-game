@@ -3,6 +3,7 @@ import { and, desc, eq, gte } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createIntentSchema, type IntentSummary, type IntentsListResponse } from "shared/intent";
+import type { PnlSplitResponse, SourceFlow } from "shared/pnl";
 import { getDb } from "../db/client";
 import { equitySnapshots, routineRuns, trades, userIntents, users } from "../db/schema";
 import { open } from "../lib/crypto";
@@ -368,6 +369,35 @@ meRoutes.get("/equity-series", async (c) => {
       longMarketValue: Number(r.longMarketValue),
     })),
   });
+});
+
+meRoutes.get("/pnl-split", async (c) => {
+  const user = c.get("user");
+  const db = getDb(c.env.DB);
+  const rows = await db
+    .select({
+      source: trades.source,
+      side: trades.side,
+      filledQty: trades.filledQty,
+      filledAvgPrice: trades.filledAvgPrice,
+    })
+    .from(trades)
+    .where(eq(trades.userId, user.id));
+  const tally: Record<"ai" | "direct", SourceFlow> = {
+    ai: { netRealized: 0, tradeCount: 0 },
+    direct: { netRealized: 0, tradeCount: 0 },
+  };
+  for (const r of rows) {
+    const src = r.source === "direct" ? "direct" : "ai";
+    const fq = r.filledQty != null ? Number(r.filledQty) : 0;
+    const fp = r.filledAvgPrice != null ? Number(r.filledAvgPrice) : 0;
+    if (!Number.isFinite(fq) || !Number.isFinite(fp) || fq <= 0 || fp <= 0) continue;
+    tally[src].tradeCount += 1;
+    const notional = fq * fp;
+    tally[src].netRealized += r.side === "sell" ? notional : -notional;
+  }
+  const payload: PnlSplitResponse = { strategy: tally.ai, direct: tally.direct };
+  return c.json(payload);
 });
 
 meRoutes.get("/intents", async (c) => {

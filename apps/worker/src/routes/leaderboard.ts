@@ -10,7 +10,7 @@ import type {
 import { LEADERBOARD_RANGES } from "shared/leaderboard";
 import type { TeamColor } from "shared/auth";
 import { getDb } from "../db/client";
-import { equitySnapshots, users } from "../db/schema";
+import { equitySnapshots, trades, users } from "../db/schema";
 import { requireSession, type AppEnv } from "../middleware/session";
 
 export const leaderboardRoutes = new Hono<AppEnv>();
@@ -89,10 +89,11 @@ async function getPublicLeaderboardRow(
   const equity = latest ? Number(latest.equity) : null;
   const lastUpdatedAt = latest?.t ?? null;
 
-  const [hourAgo, dayAgo, weekAgo] = await Promise.all([
+  const [hourAgo, dayAgo, weekAgo, flow] = await Promise.all([
     equityAtOrBefore(db, player.id, nowSec - 60 * 60),
     equityAtOrBefore(db, player.id, nowSec - 24 * 60 * 60),
     equityAtOrBefore(db, player.id, nowSec - 7 * 24 * 60 * 60),
+    netRealizedBySource(db, player.id),
   ]);
 
   return {
@@ -104,7 +105,50 @@ async function getPublicLeaderboardRow(
     equity24hAgo: dayAgo,
     equity7dAgo: weekAgo,
     lastUpdatedAt,
+    strategyNetRealized: flow.strategyNetRealized,
+    directNetRealized: flow.directNetRealized,
+    strategyTradeCount: flow.strategyTradeCount,
+    directTradeCount: flow.directTradeCount,
   };
+}
+
+async function netRealizedBySource(
+  db: DbClient,
+  userId: string,
+): Promise<{
+  strategyNetRealized: number;
+  directNetRealized: number;
+  strategyTradeCount: number;
+  directTradeCount: number;
+}> {
+  const rows = await db
+    .select({
+      source: trades.source,
+      side: trades.side,
+      filledQty: trades.filledQty,
+      filledAvgPrice: trades.filledAvgPrice,
+    })
+    .from(trades)
+    .where(eq(trades.userId, userId));
+  let strategyNetRealized = 0;
+  let directNetRealized = 0;
+  let strategyTradeCount = 0;
+  let directTradeCount = 0;
+  for (const r of rows) {
+    const fq = r.filledQty != null ? Number(r.filledQty) : 0;
+    const fp = r.filledAvgPrice != null ? Number(r.filledAvgPrice) : 0;
+    if (!Number.isFinite(fq) || !Number.isFinite(fp) || fq <= 0 || fp <= 0) continue;
+    const notional = fq * fp;
+    const signed = r.side === "sell" ? notional : -notional;
+    if (r.source === "direct") {
+      directNetRealized += signed;
+      directTradeCount += 1;
+    } else {
+      strategyNetRealized += signed;
+      strategyTradeCount += 1;
+    }
+  }
+  return { strategyNetRealized, directNetRealized, strategyTradeCount, directTradeCount };
 }
 
 async function equityAtOrBefore(
