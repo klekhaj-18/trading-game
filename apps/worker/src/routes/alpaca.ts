@@ -6,6 +6,7 @@ import { getDb } from "../db/client";
 import { users } from "../db/schema";
 import { seal } from "../lib/crypto";
 import { AlpacaAuthError, fetchAccount } from "../lib/alpaca";
+import { captureEquitySnapshotForUser } from "../routines/cron";
 import { requireSession, type AppEnv } from "../middleware/session";
 
 export const alpacaRoutes = new Hono<AppEnv>();
@@ -47,6 +48,8 @@ alpacaRoutes.post("/keys", zValidator("json", alpacaKeysSchema), async (c) => {
         alpacaAccountId: account.id,
       })
       .where(eq(users.id, user.id));
+    const [userRow] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    if (userRow) await captureEquitySnapshotForUser(c.env, userRow);
     return c.json({
       accountId: account.id,
       accountNumber: account.account_number,

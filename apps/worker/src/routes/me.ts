@@ -16,6 +16,7 @@ import {
   type AlpacaCreds,
 } from "../lib/alpaca";
 import { invalidateUserAlpacaCaches } from "../lib/user-cache";
+import { captureEquitySnapshotForUser } from "../routines/cron";
 import { requireSession, type AppEnv } from "../middleware/session";
 
 export const meRoutes = new Hono<AppEnv>();
@@ -261,11 +262,31 @@ meRoutes.get("/equity-series", async (c) => {
   const since =
     range === "7d" ? nowSec - 7 * 24 * 60 * 60 : range === "30d" ? nowSec - 30 * 24 * 60 * 60 : nowSec - 24 * 60 * 60;
   const db = getDb(c.env.DB);
-  const rows = await db
-    .select()
-    .from(equitySnapshots)
-    .where(and(eq(equitySnapshots.userId, user.id), gte(equitySnapshots.capturedAt, since)))
-    .orderBy(equitySnapshots.capturedAt);
+
+  const readSeries = async () =>
+    db
+      .select()
+      .from(equitySnapshots)
+      .where(and(eq(equitySnapshots.userId, user.id), gte(equitySnapshots.capturedAt, since)))
+      .orderBy(equitySnapshots.capturedAt);
+
+  let rows = await readSeries();
+
+  if (rows.length === 0) {
+    const [totalRow] = await db
+      .select({ n: equitySnapshots.id })
+      .from(equitySnapshots)
+      .where(eq(equitySnapshots.userId, user.id))
+      .limit(1);
+    if (!totalRow) {
+      const [userRow] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+      if (userRow && userRow.alpacaKeyCiphertext) {
+        const captured = await captureEquitySnapshotForUser(c.env, userRow);
+        if (captured) rows = await readSeries();
+      }
+    }
+  }
+
   return c.json({
     range,
     points: rows.map((r) => ({

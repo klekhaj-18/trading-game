@@ -16,13 +16,7 @@ const SLOT_BY_CRON: Record<string, RoutineSlot> = {
   "45 19 * * 1-5": "close",
 };
 
-const EQUITY_CRON = "*/5 13-20 * * 1-5";
-
 export async function handleScheduled(cron: string, env: Env, ctx: ExecutionContext): Promise<void> {
-  if (cron === EQUITY_CRON) {
-    ctx.waitUntil(captureEquitySnapshots(env));
-    return;
-  }
   const slot = SLOT_BY_CRON[cron];
   if (!slot) {
     console.warn("unknown cron", cron);
@@ -36,6 +30,7 @@ export async function handleScheduled(cron: string, env: Env, ctx: ExecutionCont
   }
 
   ctx.waitUntil(runSlotForAllUsers(env, slot));
+  ctx.waitUntil(captureEquitySnapshots(env));
 }
 
 async function runSlotForAllUsers(env: Env, slot: RoutineSlot): Promise<void> {
@@ -52,39 +47,46 @@ async function runSlotForAllUsers(env: Env, slot: RoutineSlot): Promise<void> {
   );
 }
 
+export async function captureEquitySnapshotForUser(
+  env: Env,
+  user: typeof users.$inferSelect,
+): Promise<boolean> {
+  if (!user.alpacaKeyCiphertext || !user.alpacaKeyIv || !user.alpacaSecretCiphertext || !user.alpacaSecretIv) {
+    return false;
+  }
+  try {
+    const apiKey = await open(
+      { ciphertext: user.alpacaKeyCiphertext, iv: user.alpacaKeyIv },
+      env.ALPACA_KEY_ENCRYPTION_KEY,
+    );
+    const apiSecret = await open(
+      { ciphertext: user.alpacaSecretCiphertext, iv: user.alpacaSecretIv },
+      env.ALPACA_KEY_ENCRYPTION_KEY,
+    );
+    const creds: AlpacaCreds = { apiKey, apiSecret };
+    const acct = await fetchAccount(creds.apiKey, creds.apiSecret);
+    const db = getDb(env.DB);
+    await db.insert(equitySnapshots).values({
+      id: ulid(),
+      userId: user.id,
+      equity: acct.equity,
+      cash: acct.cash,
+      buyingPower: acct.buying_power,
+      longMarketValue: acct.long_market_value,
+      capturedAt: Math.floor(Date.now() / 1000),
+    });
+    return true;
+  } catch (err) {
+    console.error("equity snapshot failed for user", user.id, err);
+    return false;
+  }
+}
+
 export async function captureEquitySnapshots(env: Env): Promise<void> {
   const db = getDb(env.DB);
   const linked = await db
     .select()
     .from(users)
     .where(isNotNull(users.alpacaKeyCiphertext));
-  const nowSec = Math.floor(Date.now() / 1000);
-  await Promise.allSettled(
-    linked.map(async (u) => {
-      if (!u.alpacaKeyCiphertext || !u.alpacaKeyIv || !u.alpacaSecretCiphertext || !u.alpacaSecretIv) return;
-      try {
-        const apiKey = await open(
-          { ciphertext: u.alpacaKeyCiphertext, iv: u.alpacaKeyIv },
-          env.ALPACA_KEY_ENCRYPTION_KEY,
-        );
-        const apiSecret = await open(
-          { ciphertext: u.alpacaSecretCiphertext, iv: u.alpacaSecretIv },
-          env.ALPACA_KEY_ENCRYPTION_KEY,
-        );
-        const creds: AlpacaCreds = { apiKey, apiSecret };
-        const acct = await fetchAccount(creds.apiKey, creds.apiSecret);
-        await db.insert(equitySnapshots).values({
-          id: ulid(),
-          userId: u.id,
-          equity: acct.equity,
-          cash: acct.cash,
-          buyingPower: acct.buying_power,
-          longMarketValue: acct.long_market_value,
-          capturedAt: nowSec,
-        });
-      } catch (err) {
-        console.error("equity snapshot failed for user", u.id, err);
-      }
-    }),
-  );
+  await Promise.allSettled(linked.map((u) => captureEquitySnapshotForUser(env, u)));
 }
