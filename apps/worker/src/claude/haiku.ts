@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { IntentSummary } from "shared/intent";
 import type { OperationalPlan } from "shared/playbook";
 import type { HaikuDecision, HaikuDecisionsOutput, RoutineSlot } from "shared/routine";
 import { anthropic } from "./client";
@@ -50,6 +51,12 @@ PER-SLOT EMPHASIS (the plan's per_slot_emphasis tells you the slot-specific tilt
 - afternoon (14:00 ET): sizing review, reassess stops.
 - close (15:45 ET): square up or protect gains per the plan.
 
+USER INTENTS (override layer):
+The player may submit intents — explicit overrides like "buy 5 AAPL today" — that override the plan's universe restriction. You'll see them as a USER INTENTS block. Two flavors:
+- BINDING (one-shot): MUST be addressed THIS slot. Either honor it (emit a buy/sell decision tagged with intent_id) or reject it with a reason (return it in consumed_intents with status="rejected"). Silently ignoring a binding intent is auto-rejected by the system.
+- STANDING: address each slot. Honor when conditions match; defer with a reason when they don't (status="deferred" in consumed_intents).
+For each intent you saw, emit an entry in consumed_intents with id + status (honored | rejected | deferred) + reason. Decisions you emit to fulfill an intent MUST set their intent_id field — that is what bypasses the universe check. Sizing, concentration, and buying-power caps still apply to intent-fulfilling decisions. If a player wants 1000 AAPL and that breaches sizing, reject with a reason that names the specific cap.
+
 OUTPUT PROTOCOL:
 - Call the \`submit_decisions\` tool exactly once with your reasoning and a list of decisions.
 - Include at least one decision per run (use 'hold' for every open position if nothing else applies).
@@ -88,6 +95,31 @@ const submitDecisionsTool: Anthropic.Tool = {
             },
             time_in_force: { type: "string", enum: ["day", "gtc"] },
             rationale: { type: "string" },
+            intent_id: {
+              type: "string",
+              description:
+                "Set this when the decision is fulfilling a player intent from the USER INTENTS block. Bypasses universe + duplicate validators. Sizing, concentration, and buying-power caps still apply.",
+            },
+          },
+        },
+      },
+      consumed_intents: {
+        type: "array",
+        description:
+          "Outcome for every pending intent you saw. Required when USER INTENTS were present.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "status"],
+          properties: {
+            id: { type: "string" },
+            status: {
+              type: "string",
+              enum: ["honored", "rejected", "deferred"],
+              description:
+                "honored = a buy/sell decision (with this intent_id) was emitted. rejected = cannot be done this slot. deferred = standing intent, conditions not met yet.",
+            },
+            reason: { type: "string" },
           },
         },
       },
@@ -103,6 +135,7 @@ export interface RoutineInput {
   snapshot: MarketSnapshot;
   priorValidationFailures: { symbol: string; reason: string; atIso: string }[];
   oneShotInstruction?: string;
+  userIntents?: IntentSummary[];
 }
 
 export interface RoutineLlmResult {
@@ -204,6 +237,24 @@ function renderAccountLayer(
   return lines.join("\n");
 }
 
+function renderUserIntentsLayer(intents: IntentSummary[]): string {
+  if (intents.length === 0) return "";
+  const lines: string[] = [];
+  lines.push("# USER INTENTS (override layer — must be addressed)");
+  lines.push("");
+  for (const it of intents) {
+    const kind = it.bindingNextSlot ? "BINDING (one-shot, must address this slot)" : "STANDING (address each slot until expiry)";
+    const created = new Date(it.createdAt * 1000).toISOString();
+    lines.push(`- intent_id=${it.id} · ${kind} · created=${created}`);
+    lines.push(`  text: ${JSON.stringify(it.text)}`);
+  }
+  lines.push("");
+  lines.push(
+    "For each intent above, include an entry in consumed_intents (id + status + reason). Decisions that fulfill an intent MUST set their intent_id field.",
+  );
+  return lines.join("\n");
+}
+
 function renderSnapshotLayer(snapshot: MarketSnapshot, slot: RoutineSlot, oneShotInstruction?: string): string {
   const lines: string[] = [];
   lines.push(`# Market snapshot (slot=${slot}, as_of=${snapshot.asOf})`);
@@ -296,6 +347,14 @@ export async function runRoutineLlm(env: Env, input: RoutineInput): Promise<Rout
             type: "text",
             text: renderSnapshotLayer(input.snapshot, input.slot, input.oneShotInstruction),
           },
+          ...(input.userIntents && input.userIntents.length > 0
+            ? [
+                {
+                  type: "text" as const,
+                  text: renderUserIntentsLayer(input.userIntents),
+                },
+              ]
+            : []),
         ],
       },
     ],

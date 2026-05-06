@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { and, desc, eq, gte } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { createIntentSchema, type IntentSummary, type IntentsListResponse } from "shared/intent";
 import { getDb } from "../db/client";
-import { equitySnapshots, routineRuns, trades, users } from "../db/schema";
+import { equitySnapshots, routineRuns, trades, userIntents, users } from "../db/schema";
 import { open } from "../lib/crypto";
 import {
   AlpacaAuthError,
@@ -367,6 +368,91 @@ meRoutes.get("/equity-series", async (c) => {
       longMarketValue: Number(r.longMarketValue),
     })),
   });
+});
+
+meRoutes.get("/intents", async (c) => {
+  const user = c.get("user");
+  const db = getDb(c.env.DB);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rows = await db
+    .select()
+    .from(userIntents)
+    .where(eq(userIntents.userId, user.id))
+    .orderBy(desc(userIntents.createdAt))
+    .limit(50);
+  const pending: IntentSummary[] = [];
+  const recent: IntentSummary[] = [];
+  for (const r of rows) {
+    const expired = r.status === "pending" && r.expiresAt < nowSec;
+    const summary: IntentSummary = {
+      id: r.id,
+      text: r.text,
+      bindingNextSlot: r.bindingNextSlot,
+      status: expired ? "expired" : (r.status as IntentSummary["status"]),
+      createdAt: r.createdAt,
+      expiresAt: r.expiresAt,
+      consumedAt: r.consumedAt,
+      rejectedReason: r.rejectedReason,
+      routineRunId: r.routineRunId,
+    };
+    if (summary.status === "pending") pending.push(summary);
+    else recent.push(summary);
+  }
+  const payload: IntentsListResponse = { pending, recent: recent.slice(0, 20) };
+  return c.json(payload);
+});
+
+meRoutes.post("/intents", zValidator("json", createIntentSchema), async (c) => {
+  const user = c.get("user");
+  const input = c.req.valid("json");
+  const db = getDb(c.env.DB);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const ttlSec = input.ttlHours * 60 * 60;
+  const expiresAt = nowSec + ttlSec;
+  const id = ulid();
+  await db.insert(userIntents).values({
+    id,
+    userId: user.id,
+    text: input.text,
+    bindingNextSlot: input.bindingNextSlot,
+    expiresAt,
+    status: "pending",
+    routineRunId: null,
+    rejectedReason: null,
+    consumedAt: null,
+  });
+  const summary: IntentSummary = {
+    id,
+    text: input.text,
+    bindingNextSlot: input.bindingNextSlot,
+    status: "pending",
+    createdAt: nowSec,
+    expiresAt,
+    consumedAt: null,
+    rejectedReason: null,
+    routineRunId: null,
+  };
+  return c.json({ ok: true, intent: summary });
+});
+
+meRoutes.delete("/intents/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const db = getDb(c.env.DB);
+  const [row] = await db
+    .select()
+    .from(userIntents)
+    .where(and(eq(userIntents.id, id), eq(userIntents.userId, user.id)))
+    .limit(1);
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.status !== "pending") {
+    return c.json({ error: "not_pending", status: row.status }, 409);
+  }
+  await db
+    .update(userIntents)
+    .set({ status: "rejected", rejectedReason: "withdrawn by user", consumedAt: Math.floor(Date.now() / 1000) })
+    .where(eq(userIntents.id, id));
+  return c.json({ ok: true });
 });
 
 function serializeRun(r: typeof routineRuns.$inferSelect) {

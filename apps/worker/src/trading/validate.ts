@@ -60,7 +60,7 @@ export function validateDecisions(decisions: HaikuDecision[], ctx: ValidationCon
       continue;
     }
 
-    if (!universeSet.has(sym)) {
+    if (!d.intent_id && !universeSet.has(sym)) {
       fail("Symbol not in plan universe");
       continue;
     }
@@ -89,7 +89,7 @@ export function validateDecisions(decisions: HaikuDecision[], ctx: ValidationCon
       }
     }
 
-    if (openOrderSymbolSides.has(`${sym}|${d.action}`)) {
+    if (!d.intent_id && openOrderSymbolSides.has(`${sym}|${d.action}`)) {
       fail(`duplicate: an open ${d.action} order already exists for ${sym}`);
       continue;
     }

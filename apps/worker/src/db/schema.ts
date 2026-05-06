@@ -156,6 +156,28 @@ export const equitySnapshots = sqliteTable(
   }),
 );
 
+export const userIntents = sqliteTable(
+  "user_intents",
+  {
+    id: ulid(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    bindingNextSlot: integer("binding_next_slot", { mode: "boolean" }).notNull().default(false),
+    expiresAt: integer("expires_at").notNull(),
+    status: text("status").notNull().default("pending"),
+    routineRunId: text("routine_run_id").references(() => routineRuns.id),
+    rejectedReason: text("rejected_reason"),
+    consumedAt: integer("consumed_at"),
+    createdAt: integer("created_at").notNull().default(unixNow),
+  },
+  (t) => ({
+    userStatusIdx: index("intents_user_status_idx").on(t.userId, t.status),
+    userCreatedIdx: index("intents_user_created_idx").on(t.userId, t.createdAt),
+  }),
+);
+
 export const oneShotInstructions = sqliteTable(
   "one_shot_instructions",
   {

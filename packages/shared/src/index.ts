@@ -4,3 +4,4 @@ export * from "./coach";
 export * from "./routine";
 export * from "./race";
 export * from "./leaderboard";
+export * from "./intent";

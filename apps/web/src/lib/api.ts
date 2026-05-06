@@ -7,6 +7,7 @@ import type {
   PlanSummary,
 } from "shared/playbook";
 import type { CoachChatResponse, CoachMessage } from "shared/coach";
+import type { CreateIntentInput, IntentSummary, IntentsListResponse } from "shared/intent";
 import type {
   FireTestRoutineInput,
   HaikuDecision,
@@ -214,6 +215,17 @@ export const api = {
 
   meCancelOrder: (id: string) =>
     request<{ ok: true }>(`/api/me/orders/${id}`, { method: "DELETE" }),
+
+  meIntents: () => request<IntentsListResponse>("/api/me/intents"),
+
+  meCreateIntent: (input: CreateIntentInput) =>
+    request<{ ok: true; intent: IntentSummary }>("/api/me/intents", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  meCancelIntent: (id: string) =>
+    request<{ ok: true }>(`/api/me/intents/${id}`, { method: "DELETE" }),
 
   meClosePosition: (symbol: string) =>
     request<{ ok: true }>(`/api/me/positions/${encodeURIComponent(symbol)}`, {

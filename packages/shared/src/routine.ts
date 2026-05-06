@@ -26,11 +26,22 @@ export interface HaikuDecision {
   limit_price?: number;
   time_in_force: "day" | "gtc";
   rationale: string;
+  /** When set, this decision is fulfilling a player intent and bypasses the universe + duplicate validators. Sizing, concentration, and buying-power caps still apply. */
+  intent_id?: string;
+}
+
+/** Outcome the routine LLM declares for each pending user intent it saw. */
+export interface ConsumedIntent {
+  id: string;
+  /** honored = an order was placed for it; rejected = cannot be done; deferred = standing intent, conditions not met this slot. */
+  status: "honored" | "rejected" | "deferred";
+  reason?: string;
 }
 
 export interface HaikuDecisionsOutput {
   reasoning: string;
   decisions: HaikuDecision[];
+  consumed_intents?: ConsumedIntent[];
 }
 
 export interface RoutineRunSummary {

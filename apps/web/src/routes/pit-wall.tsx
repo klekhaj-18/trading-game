@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { IntentSummary } from "shared/intent";
 import type { PlaybookCurrentResponse } from "shared/playbook";
 import { ApiError, api, type EquityPoint, type OpenOrderSummary, type PositionSummary, type RoutineRunSummary } from "../lib/api";
 import { cn } from "../lib/utils";
@@ -18,6 +19,7 @@ export function PitWallPage() {
   const pbQ = useQuery({ queryKey: ["playbook"], queryFn: api.playbookCurrent });
   const posQ = useQuery({ queryKey: ["me", "positions"], queryFn: api.mePositions, refetchInterval: 30_000 });
   const ordersQ = useQuery({ queryKey: ["me", "open-orders"], queryFn: api.meOpenOrders, refetchInterval: 30_000 });
+  const intentsQ = useQuery({ queryKey: ["me", "intents"], queryFn: api.meIntents, refetchInterval: 60_000 });
   const equityQ = useQuery({
     queryKey: ["me", "equity", range],
     queryFn: () => api.meEquitySeries(range),
@@ -103,6 +105,11 @@ export function PitWallPage() {
         {showDirectOrder && <DirectOrderComposer onDone={() => setShowDirectOrder(false)} />}
         <OpenOrdersTable orders={ordersQ.data?.orders ?? []} />
       </div>
+
+      <IntentsSection
+        pending={intentsQ.data?.pending ?? []}
+        recent={intentsQ.data?.recent ?? []}
+      />
 
       <div>
         <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase mb-3">
@@ -1023,6 +1030,176 @@ function DirectOrderComposer({ onDone }: { onDone: () => void }) {
           {placeM.isPending ? "Placing…" : `Place ${side}`}
         </button>
       </div>
+    </div>
+  );
+}
+
+function IntentsSection({ pending, recent }: { pending: IntentSummary[]; recent: IntentSummary[] }) {
+  const [showComposer, setShowComposer] = useState(false);
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-3">
+        <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase">Player intents</div>
+        <button
+          onClick={() => setShowComposer((v) => !v)}
+          className="text-[10px] rounded border border-zinc-700 px-2 py-1 uppercase tracking-wider text-zinc-300 hover:text-white hover:border-zinc-500"
+        >
+          {showComposer ? "Cancel" : "+ I want…"}
+        </button>
+      </div>
+      {showComposer && <IntentComposer onDone={() => setShowComposer(false)} />}
+      {pending.length > 0 && (
+        <div className="space-y-2 mb-3">
+          {pending.map((it) => (
+            <PendingIntentCard key={it.id} intent={it} />
+          ))}
+        </div>
+      )}
+      {pending.length === 0 && !showComposer && (
+        <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] text-xs text-zinc-500 text-center py-6">
+          No pending intents. Add one to override the strategy for a single trade.
+        </div>
+      )}
+      {recent.length > 0 && (
+        <div className="mt-4 space-y-1.5">
+          <div className="text-[10px] tracking-wider text-zinc-600 uppercase mb-1">Recent outcomes</div>
+          {recent.slice(0, 8).map((it) => (
+            <RecentIntentRow key={it.id} intent={it} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IntentComposer({ onDone }: { onDone: () => void }) {
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+  const [binding, setBinding] = useState(true);
+  const [ttlHours, setTtlHours] = useState("24");
+
+  const placeM = useMutation({
+    mutationFn: () =>
+      api.meCreateIntent({
+        text: text.trim(),
+        bindingNextSlot: binding,
+        ttlHours: binding ? 24 : Math.max(1, Math.min(72, Number(ttlHours) || 24)),
+      }),
+    onSuccess: async () => {
+      setText("");
+      await qc.invalidateQueries({ queryKey: ["me", "intents"] });
+      onDone();
+    },
+  });
+
+  const err = placeM.error as ApiError | null;
+  const canSubmit = text.trim().length >= 3;
+
+  return (
+    <div className="rounded-lg border border-blue-500/40 bg-blue-500/5 p-3 mb-3 space-y-3">
+      <div className="text-[10px] tracking-wider text-blue-300 uppercase">
+        Intent — Claude must address this. Bypasses the universe restriction; risk caps still apply.
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="e.g. buy 5 AAPL at market, or scale into NVDA on weakness"
+        rows={2}
+        className="w-full text-sm rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 placeholder:text-zinc-600"
+      />
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <button
+          onClick={() => setBinding(true)}
+          className={cn(
+            "rounded px-2 py-1 uppercase tracking-wider text-[10px]",
+            binding ? "bg-blue-500/30 text-blue-100 border border-blue-400" : "border border-zinc-700 text-zinc-400",
+          )}
+        >
+          Binding (next slot)
+        </button>
+        <button
+          onClick={() => setBinding(false)}
+          className={cn(
+            "rounded px-2 py-1 uppercase tracking-wider text-[10px]",
+            !binding ? "bg-blue-500/30 text-blue-100 border border-blue-400" : "border border-zinc-700 text-zinc-400",
+          )}
+        >
+          Standing
+        </button>
+        {!binding && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-zinc-500">TTL</span>
+            <input
+              value={ttlHours}
+              onChange={(e) => setTtlHours(e.target.value)}
+              inputMode="numeric"
+              className="w-14 rounded border border-zinc-700 bg-zinc-900 px-2 py-1"
+            />
+            <span className="text-zinc-500">hours (max 72)</span>
+          </div>
+        )}
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] text-red-400 min-h-[1em]">{err ? err.message : ""}</div>
+        <button
+          onClick={() => placeM.mutate()}
+          disabled={!canSubmit || placeM.isPending}
+          className="text-xs rounded border border-blue-400 bg-blue-500/20 px-3 py-1.5 uppercase tracking-wider font-semibold text-blue-100 hover:bg-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {placeM.isPending ? "Submitting…" : "Submit intent"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PendingIntentCard({ intent }: { intent: IntentSummary }) {
+  const qc = useQueryClient();
+  const cancelM = useMutation({
+    mutationFn: () => api.meCancelIntent(intent.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["me", "intents"] }),
+  });
+  const ttl = Math.max(0, intent.expiresAt - Math.floor(Date.now() / 1000));
+  const ttlLabel = ttl > 3600 ? `${Math.floor(ttl / 3600)}h` : `${Math.max(1, Math.floor(ttl / 60))}m`;
+  return (
+    <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 flex items-start gap-3">
+      <div className="flex-1 min-w-0 space-y-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] uppercase tracking-wider rounded bg-blue-500/30 px-1.5 py-0.5 text-blue-100">
+            {intent.bindingNextSlot ? "Binding" : "Standing"}
+          </span>
+          <span className="text-[10px] text-zinc-500">expires in {ttlLabel}</span>
+        </div>
+        <div className="text-sm text-zinc-200">{intent.text}</div>
+      </div>
+      <button
+        onClick={() => cancelM.mutate()}
+        disabled={cancelM.isPending}
+        className="text-[10px] rounded border border-zinc-700 px-2 py-1 uppercase tracking-wider text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+      >
+        {cancelM.isPending ? "…" : "Withdraw"}
+      </button>
+    </div>
+  );
+}
+
+function RecentIntentRow({ intent }: { intent: IntentSummary }) {
+  const palette: Record<IntentSummary["status"], string> = {
+    pending: "border-zinc-700 text-zinc-400",
+    honored: "border-emerald-500/40 bg-emerald-500/5 text-emerald-200",
+    rejected: "border-red-500/40 bg-red-500/5 text-red-200",
+    expired: "border-zinc-700 bg-zinc-800/30 text-zinc-500",
+  };
+  return (
+    <div className={cn("rounded border px-2.5 py-1.5 text-xs", palette[intent.status])}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="uppercase tracking-wider text-[10px] font-semibold">{intent.status}</span>
+        {intent.consumedAt && (
+          <span className="text-[10px] opacity-70">{new Date(intent.consumedAt * 1000).toLocaleString()}</span>
+        )}
+      </div>
+      <div className="mt-0.5 truncate">{intent.text}</div>
+      {intent.rejectedReason && <div className="mt-0.5 text-[11px] opacity-80">{intent.rejectedReason}</div>}
     </div>
   );
 }

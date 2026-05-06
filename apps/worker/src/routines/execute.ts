@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt } from "drizzle-orm";
 import type {
   HaikuDecision,
   PlacedOrderSummary,
@@ -7,9 +7,10 @@ import type {
   RoutineStatus,
   ValidationFailure,
 } from "shared/routine";
+import type { IntentSummary } from "shared/intent";
 import type { OperationalPlan } from "shared/playbook";
 import { getDb } from "../db/client";
-import { operationalPlans, routineRuns, trades, users } from "../db/schema";
+import { operationalPlans, routineRuns, trades, userIntents, users } from "../db/schema";
 import { ulid } from "../lib/ids";
 import { open } from "../lib/crypto";
 import { AlpacaAuthError, fetchTradableSymbols, placeOrder, type AlpacaCreds } from "../lib/alpaca";
@@ -136,6 +137,7 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
     ]);
 
     const priorValidationFailures = await recentValidationFailures(env, input.userId);
+    const pendingIntents = await loadPendingIntents(env, input.userId);
 
     const llm = await runRoutineLlm(env, {
       slot: input.slot,
@@ -145,6 +147,7 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
       snapshot,
       priorValidationFailures,
       oneShotInstruction: input.oneShotInstruction,
+      userIntents: pendingIntents,
     });
 
     const validation = validateDecisions(llm.decisions.decisions, {
@@ -200,6 +203,16 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
           reason: `alpaca order rejected: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
+    }
+
+    if (pendingIntents.length > 0) {
+      await reconcileIntents(env, {
+        runId,
+        intents: pendingIntents,
+        consumed: llm.decisions.consumed_intents ?? [],
+        decisions: llm.decisions.decisions,
+        placedDecisionIndices: new Set(placed.map((p) => p.decisionIndex)),
+      });
     }
 
     const anyOrders = placed.length > 0;
@@ -264,6 +277,114 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
       errorText: msg,
       usage: { input: null, output: null, cacheRead: null, cacheWrite: null },
     };
+  }
+}
+
+async function loadPendingIntents(env: Env, userId: string): Promise<IntentSummary[]> {
+  const db = getDb(env.DB);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rows = await db
+    .select()
+    .from(userIntents)
+    .where(
+      and(
+        eq(userIntents.userId, userId),
+        eq(userIntents.status, "pending"),
+        gt(userIntents.expiresAt, nowSec),
+      ),
+    )
+    .orderBy(desc(userIntents.createdAt))
+    .limit(20);
+  return rows.map((r) => ({
+    id: r.id,
+    text: r.text,
+    bindingNextSlot: r.bindingNextSlot,
+    status: "pending" as const,
+    createdAt: r.createdAt,
+    expiresAt: r.expiresAt,
+    consumedAt: r.consumedAt,
+    rejectedReason: r.rejectedReason,
+    routineRunId: r.routineRunId,
+  }));
+}
+
+async function reconcileIntents(
+  env: Env,
+  args: {
+    runId: string;
+    intents: IntentSummary[];
+    consumed: { id: string; status: "honored" | "rejected" | "deferred"; reason?: string }[];
+    decisions: HaikuDecision[];
+    placedDecisionIndices: Set<number>;
+  },
+): Promise<void> {
+  const db = getDb(env.DB);
+  const nowSec = Math.floor(Date.now() / 1000);
+  // Intents whose intent_id was emitted on a successfully-placed order.
+  const placedIntentIds = new Set<string>();
+  args.decisions.forEach((d, idx) => {
+    if (d.intent_id && args.placedDecisionIndices.has(idx)) {
+      placedIntentIds.add(d.intent_id);
+    }
+  });
+  const consumedById = new Map(args.consumed.map((c) => [c.id, c]));
+
+  for (const intent of args.intents) {
+    if (placedIntentIds.has(intent.id)) {
+      // Order placed for this intent — honor it regardless of what Haiku declared.
+      await db
+        .update(userIntents)
+        .set({
+          status: "honored",
+          routineRunId: args.runId,
+          consumedAt: nowSec,
+        })
+        .where(eq(userIntents.id, intent.id));
+      continue;
+    }
+    const declared = consumedById.get(intent.id);
+    if (declared) {
+      if (declared.status === "deferred") {
+        // Standing intents stay pending; just record the routine run had visibility.
+        if (!intent.bindingNextSlot) continue;
+        // Binding intent declared deferred — that's effectively a rejection.
+        await db
+          .update(userIntents)
+          .set({
+            status: "rejected",
+            routineRunId: args.runId,
+            rejectedReason: declared.reason ?? "binding intent cannot be deferred — Haiku must honor or reject",
+            consumedAt: nowSec,
+          })
+          .where(eq(userIntents.id, intent.id));
+        continue;
+      }
+      const finalStatus = declared.status === "honored" ? "honored" : "rejected";
+      // 'honored' without a placed order is suspicious but we trust Haiku for now.
+      await db
+        .update(userIntents)
+        .set({
+          status: finalStatus,
+          routineRunId: args.runId,
+          rejectedReason: finalStatus === "rejected" ? declared.reason ?? "rejected by Haiku" : null,
+          consumedAt: nowSec,
+        })
+        .where(eq(userIntents.id, intent.id));
+      continue;
+    }
+    // Not in consumed_intents and no order placed for it.
+    if (intent.bindingNextSlot) {
+      await db
+        .update(userIntents)
+        .set({
+          status: "rejected",
+          routineRunId: args.runId,
+          rejectedReason: "Haiku failed to address binding instruction",
+          consumedAt: nowSec,
+        })
+        .where(eq(userIntents.id, intent.id));
+    }
+    // Standing intents stay pending until expiry.
   }
 }
 

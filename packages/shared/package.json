@@ -12,7 +12,8 @@
     "./coach": "./src/coach.ts",
     "./routine": "./src/routine.ts",
     "./race": "./src/race.ts",
-    "./leaderboard": "./src/leaderboard.ts"
+    "./leaderboard": "./src/leaderboard.ts",
+    "./intent": "./src/intent.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
