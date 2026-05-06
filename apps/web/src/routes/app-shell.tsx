@@ -119,6 +119,7 @@ export function AppShell() {
               Pit wall
             </ShellLink>
             <ShellLink to="/playbook">Strategy</ShellLink>
+            <ShellLink to="/info">Info</ShellLink>
             {user.isAdmin && <ShellLink to="/paddock">Paddock</ShellLink>}
           </nav>
 

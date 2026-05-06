@@ -2,8 +2,19 @@ import { Hono } from "hono";
 import { and, desc, eq, gte } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { createIntentSchema, type IntentSummary, type IntentsListResponse } from "shared/intent";
+import {
+  createIntentSchema,
+  type CreateIntentResponse,
+  type IntentSummary,
+  type IntentsListResponse,
+} from "shared/intent";
 import type { PnlSplitResponse, SourceFlow } from "shared/pnl";
+import {
+  FIRE_NOW_DAILY_LIMIT,
+  FIRE_NOW_HOURLY_LIMIT,
+  deriveFireNowSlot,
+  type FireNowResponse,
+} from "shared/routine";
 import { getDb } from "../db/client";
 import { equitySnapshots, routineRuns, trades, userIntents, users } from "../db/schema";
 import { open } from "../lib/crypto";
@@ -20,7 +31,11 @@ import {
 } from "../lib/alpaca";
 import { ulid } from "../lib/ids";
 import { invalidateUserAlpacaCaches } from "../lib/user-cache";
+import { checkAndIncrementRateLimits } from "../lib/rate-limit";
 import { captureEquitySnapshotForUser } from "../routines/cron";
+import { executeRoutine } from "../routines/execute";
+import { currentRaceState } from "../trading/race";
+import { operationalPlans } from "../db/schema";
 import { requireSession, type AppEnv } from "../middleware/session";
 
 export const meRoutes = new Hono<AppEnv>();
@@ -437,24 +452,122 @@ meRoutes.post("/intents", zValidator("json", createIntentSchema), async (c) => {
   const input = c.req.valid("json");
   const db = getDb(c.env.DB);
   const nowSec = Math.floor(Date.now() / 1000);
+
+  // Pre-flight gates only if fireImmediately is set.
+  let fireNow: FireNowResponse | undefined;
+
+  if (input.fireImmediately) {
+    const raceState = await currentRaceState(c.env, nowSec);
+    if (raceState !== "in_race") {
+      return c.json(
+        {
+          error: "race_not_active",
+          message:
+            raceState === "pre_race"
+              ? "Fire immediately is available once the race starts."
+              : "Race is over.",
+        },
+        403,
+      );
+    }
+
+    const [running] = await db
+      .select({ id: routineRuns.id })
+      .from(routineRuns)
+      .where(and(eq(routineRuns.userId, user.id), eq(routineRuns.status, "running")))
+      .limit(1);
+    if (running) {
+      return c.json(
+        {
+          error: "routine_running",
+          message: "A routine is already running. Try again once it finishes.",
+        },
+        409,
+      );
+    }
+
+    const [userRow] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    if (!userRow?.alpacaKeyCiphertext) {
+      return c.json(
+        { error: "alpaca_not_linked", message: "Link your Alpaca paper account first." },
+        400,
+      );
+    }
+    const [approvedPlan] = await db
+      .select({ id: operationalPlans.id })
+      .from(operationalPlans)
+      .where(
+        and(eq(operationalPlans.userId, user.id), eq(operationalPlans.approvalState, "approved")),
+      )
+      .limit(1);
+    if (!approvedPlan) {
+      return c.json(
+        { error: "no_approved_plan", message: "Your operational plan must be approved first." },
+        400,
+      );
+    }
+
+    const rl = await checkAndIncrementRateLimits(
+      c.env,
+      user.id,
+      [
+        { bucket: "fire_now_hour", windowSeconds: 3600, limit: FIRE_NOW_HOURLY_LIMIT },
+        { bucket: "fire_now_day", windowSeconds: 86400, limit: FIRE_NOW_DAILY_LIMIT },
+      ],
+      nowSec,
+    );
+    if (!rl.ok) {
+      const isHour = rl.failed.bucket === "fire_now_hour";
+      return c.json(
+        {
+          error: "rate_limited",
+          message: isHour
+            ? `Hourly limit reached (${FIRE_NOW_HOURLY_LIMIT}/hr). Resets in ${humanizeRemaining(rl.failed.resetAt - nowSec)}.`
+            : `Daily limit reached (${FIRE_NOW_DAILY_LIMIT}/day). Resets in ${humanizeRemaining(rl.failed.resetAt - nowSec)}.`,
+          bucket: rl.failed.bucket,
+          resetAt: rl.failed.resetAt,
+        },
+        429,
+      );
+    }
+
+    const slot = deriveFireNowSlot(nowSec);
+    const hour = rl.results.find((r) => r.bucket === "fire_now_hour")!;
+    const day = rl.results.find((r) => r.bucket === "fire_now_day")!;
+    fireNow = {
+      runId: "",
+      slot,
+      rateLimit: {
+        hourRemaining: hour.remaining,
+        dayRemaining: day.remaining,
+        hourResetAt: hour.resetAt,
+        dayResetAt: day.resetAt,
+      },
+    };
+  }
+
+  // Force binding semantics when fire-immediate is set so reconcileIntents
+  // requires Haiku to honor or explicitly reject during this run.
+  const bindingNextSlot = input.fireImmediately ? true : input.bindingNextSlot;
   const ttlSec = input.ttlHours * 60 * 60;
   const expiresAt = nowSec + ttlSec;
-  const id = ulid();
+  const intentId = ulid();
   await db.insert(userIntents).values({
-    id,
+    id: intentId,
     userId: user.id,
     text: input.text,
-    bindingNextSlot: input.bindingNextSlot,
+    bindingNextSlot,
     expiresAt,
     status: "pending",
     routineRunId: null,
     rejectedReason: null,
     consumedAt: null,
   });
+
   const summary: IntentSummary = {
-    id,
+    id: intentId,
     text: input.text,
-    bindingNextSlot: input.bindingNextSlot,
+    bindingNextSlot,
     status: "pending",
     createdAt: nowSec,
     expiresAt,
@@ -462,8 +575,43 @@ meRoutes.post("/intents", zValidator("json", createIntentSchema), async (c) => {
     rejectedReason: null,
     routineRunId: null,
   };
-  return c.json({ ok: true, intent: summary });
+
+  if (fireNow) {
+    const runId = ulid();
+    await db.insert(routineRuns).values({
+      id: runId,
+      userId: user.id,
+      operationalPlanId: null,
+      kind: "on_demand",
+      scheduledSlot: fireNow.slot,
+      oneShotInstruction: input.text,
+      status: "running",
+    });
+    fireNow.runId = runId;
+    c.executionCtx.waitUntil(
+      executeRoutine(c.env, {
+        userId: user.id,
+        slot: fireNow.slot,
+        kind: "on_demand",
+        oneShotInstruction: input.text,
+        existingRunId: runId,
+      }).catch((err) => {
+        console.error("fire-now executeRoutine failed", err);
+      }),
+    );
+    const response: CreateIntentResponse = { ok: true, intent: summary, fireNow };
+    return c.json(response);
+  }
+
+  const response: CreateIntentResponse = { ok: true, intent: summary };
+  return c.json(response);
 });
+
+function humanizeRemaining(seconds: number): string {
+  if (seconds <= 60) return `${Math.max(1, seconds)}s`;
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+  return `${Math.ceil(seconds / 3600)} h`;
+}
 
 meRoutes.delete("/intents/:id", async (c) => {
   const user = c.get("user");
