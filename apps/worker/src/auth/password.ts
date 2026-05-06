@@ -1,4 +1,4 @@
-const ITERATIONS = 210_000;
+const ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BYTES = 32;
 
@@ -47,7 +47,7 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 const DUMMY_HASH =
-  "pbkdf2$210000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  "pbkdf2$100000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 export async function timingSafeDummyVerify(password: string): Promise<void> {
   await verifyPassword(password, DUMMY_HASH);
