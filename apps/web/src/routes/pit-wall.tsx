@@ -9,6 +9,7 @@ type Range = "24h" | "7d" | "30d";
 
 export function PitWallPage() {
   const [range, setRange] = useState<Range>("24h");
+  const [showDirectOrder, setShowDirectOrder] = useState(false);
   const qc = useQueryClient();
   useEffect(() => {
     qc.invalidateQueries({ queryKey: ["me"] });
@@ -90,9 +91,16 @@ export function PitWallPage() {
       </div>
 
       <div>
-        <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase mb-3">
-          Open orders
+        <div className="flex items-baseline justify-between mb-3">
+          <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase">Open orders</div>
+          <button
+            onClick={() => setShowDirectOrder((v) => !v)}
+            className="text-[10px] rounded border border-zinc-700 px-2 py-1 uppercase tracking-wider text-zinc-300 hover:text-white hover:border-zinc-500"
+          >
+            {showDirectOrder ? "Cancel" : "+ Direct order"}
+          </button>
         </div>
+        {showDirectOrder && <DirectOrderComposer onDone={() => setShowDirectOrder(false)} />}
         <OpenOrdersTable orders={ordersQ.data?.orders ?? []} />
       </div>
 
@@ -910,6 +918,113 @@ function StrategyStatusStrip({ data }: { data: PlaybookCurrentResponse | undefin
 
 function fmtDate(unixSec: number): string {
   return new Date(unixSec * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function DirectOrderComposer({ onDone }: { onDone: () => void }) {
+  const qc = useQueryClient();
+  const [symbol, setSymbol] = useState("");
+  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [qty, setQty] = useState("");
+  const [type, setType] = useState<"market" | "limit">("market");
+  const [tif, setTif] = useState<"day" | "gtc">("day");
+  const [limitPrice, setLimitPrice] = useState("");
+
+  const placeM = useMutation({
+    mutationFn: () =>
+      api.meDirectOrder({
+        symbol: symbol.trim().toUpperCase(),
+        side,
+        qty: Number(qty),
+        type,
+        time_in_force: tif,
+        limit_price: type === "limit" ? Number(limitPrice) : undefined,
+      }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["me", "open-orders"] });
+      await qc.invalidateQueries({ queryKey: ["me", "positions"] });
+      onDone();
+    },
+  });
+
+  const err = placeM.error as ApiError | null;
+  const qtyNum = Number(qty);
+  const lpNum = Number(limitPrice);
+  const canSubmit =
+    symbol.trim().length > 0 &&
+    Number.isFinite(qtyNum) &&
+    qtyNum > 0 &&
+    Number.isInteger(qtyNum) &&
+    (type === "market" || (Number.isFinite(lpNum) && lpNum > 0));
+
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 mb-3 space-y-3">
+      <div className="text-[10px] tracking-wider text-amber-400 uppercase">
+        Direct order — bypasses the AI strategy. Only buying-power and tradability checks apply.
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs">
+        <input
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+          placeholder="AAPL"
+          className="col-span-2 sm:col-span-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 uppercase font-semibold tracking-wide"
+        />
+        <select
+          value={side}
+          onChange={(e) => setSide(e.target.value as "buy" | "sell")}
+          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5"
+        >
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <input
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          placeholder="Qty"
+          inputMode="numeric"
+          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5"
+        />
+        <select
+          value={type}
+          onChange={(e) => setType(e.target.value as "market" | "limit")}
+          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5"
+        >
+          <option value="market">Market</option>
+          <option value="limit">Limit</option>
+        </select>
+        {type === "limit" ? (
+          <input
+            value={limitPrice}
+            onChange={(e) => setLimitPrice(e.target.value)}
+            placeholder="Limit $"
+            inputMode="decimal"
+            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5"
+          />
+        ) : (
+          <div className="hidden sm:block" />
+        )}
+        <select
+          value={tif}
+          onChange={(e) => setTif(e.target.value as "day" | "gtc")}
+          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5"
+        >
+          <option value="day">Day</option>
+          <option value="gtc">GTC</option>
+        </select>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] text-red-400 min-h-[1em]">
+          {err ? err.message : ""}
+        </div>
+        <button
+          onClick={() => placeM.mutate()}
+          disabled={!canSubmit || placeM.isPending}
+          className="text-xs rounded border border-amber-400 bg-amber-500/20 px-3 py-1.5 uppercase tracking-wider font-semibold text-amber-100 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {placeM.isPending ? "Placing…" : `Place ${side}`}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function fmtUsd(n: number): string {

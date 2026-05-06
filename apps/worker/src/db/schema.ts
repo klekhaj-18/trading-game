@@ -122,6 +122,7 @@ export const trades = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     routineRunId: text("routine_run_id").references(() => routineRuns.id),
+    source: text("source").notNull().default("ai"),
     symbol: text("symbol").notNull(),
     side: text("side").notNull(),
     qty: text("qty").notNull(),

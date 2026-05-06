@@ -183,6 +183,26 @@ export const api = {
 
   meOpenOrders: () => request<{ orders: OpenOrderSummary[]; error?: string }>("/api/me/open-orders"),
 
+  meDirectOrder: (input: {
+    symbol: string;
+    side: "buy" | "sell";
+    qty: number;
+    type: "market" | "limit";
+    time_in_force: "day" | "gtc";
+    limit_price?: number;
+  }) =>
+    request<{
+      ok: true;
+      order: {
+        id: string;
+        symbol: string;
+        side: "buy" | "sell";
+        qty: number;
+        orderType: string;
+        status: string;
+      };
+    }>("/api/me/orders", { method: "POST", body: JSON.stringify(input) }),
+
   meReplaceOrder: (
     id: string,
     input: { qty?: number; limit_price?: number; time_in_force?: "day" | "gtc" },

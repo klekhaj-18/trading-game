@@ -1,0 +1,1 @@
+ALTER TABLE `trades` ADD `source` text DEFAULT 'ai' NOT NULL;

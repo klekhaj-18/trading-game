@@ -3,7 +3,7 @@ import { and, desc, eq, gte } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { getDb } from "../db/client";
-import { equitySnapshots, routineRuns, users } from "../db/schema";
+import { equitySnapshots, routineRuns, trades, users } from "../db/schema";
 import { open } from "../lib/crypto";
 import {
   AlpacaAuthError,
@@ -12,9 +12,11 @@ import {
   closePosition,
   fetchOpenOrders,
   fetchPositions,
+  placeOrder,
   replaceOrder,
   type AlpacaCreds,
 } from "../lib/alpaca";
+import { ulid } from "../lib/ids";
 import { invalidateUserAlpacaCaches } from "../lib/user-cache";
 import { captureEquitySnapshotForUser } from "../routines/cron";
 import { requireSession, type AppEnv } from "../middleware/session";
@@ -80,6 +82,20 @@ const replaceOrderSchema = z
     message: "Provide at least one of qty, limit_price, time_in_force.",
   });
 
+const directOrderSchema = z
+  .object({
+    symbol: z.string().min(1).max(8).regex(/^[A-Z][A-Z0-9.]*$/, "Symbol must be uppercase ticker"),
+    side: z.enum(["buy", "sell"]),
+    qty: z.number().int().positive().max(100_000),
+    type: z.enum(["market", "limit"]),
+    time_in_force: z.enum(["day", "gtc"]),
+    limit_price: z.number().positive().max(1_000_000).optional(),
+  })
+  .refine((v) => v.type === "market" || v.limit_price != null, {
+    message: "limit orders require limit_price",
+    path: ["limit_price"],
+  });
+
 async function getCredsForUser(env: Env, userId: string): Promise<AlpacaCreds | null> {
   const db = getDb(env.DB);
   const [u] = await db
@@ -106,6 +122,61 @@ async function getCredsForUser(env: Env, userId: string): Promise<AlpacaCreds | 
   return { apiKey, apiSecret };
 }
 
+
+meRoutes.post("/orders", zValidator("json", directOrderSchema), async (c) => {
+  const user = c.get("user");
+  const input = c.req.valid("json");
+  const creds = await getCredsForUser(c.env, user.id);
+  if (!creds) return c.json({ error: "alpaca_not_linked" }, 400);
+  try {
+    const order = await placeOrder(creds, {
+      symbol: input.symbol,
+      qty: input.qty,
+      side: input.side,
+      type: input.type,
+      time_in_force: input.time_in_force,
+      limit_price: input.type === "limit" ? input.limit_price : undefined,
+      client_order_id: `tgp-direct-${ulid()}`,
+    });
+    const db = getDb(c.env.DB);
+    await db.insert(trades).values({
+      id: ulid(),
+      alpacaOrderId: order.id,
+      userId: user.id,
+      routineRunId: null,
+      source: "direct",
+      symbol: order.symbol,
+      side: order.side,
+      qty: order.qty,
+      filledQty: order.filled_qty,
+      filledAvgPrice: order.filled_avg_price,
+      orderStatus: order.status,
+      submittedAt: Math.floor(new Date(order.submitted_at).getTime() / 1000),
+      filledAt: order.filled_at ? Math.floor(new Date(order.filled_at).getTime() / 1000) : null,
+    });
+    await invalidateUserAlpacaCaches(c.env, user.id);
+    return c.json({
+      ok: true,
+      order: {
+        id: order.id,
+        symbol: order.symbol,
+        side: order.side,
+        qty: Number(order.qty),
+        orderType: order.order_type,
+        status: order.status,
+      },
+    });
+  } catch (err) {
+    if (err instanceof AlpacaAuthError) {
+      return c.json({ error: "alpaca_auth_failed" }, 401);
+    }
+    console.error("direct-order error", err);
+    return c.json(
+      { error: "place_failed", message: err instanceof Error ? err.message : String(err) },
+      502,
+    );
+  }
+});
 
 meRoutes.patch("/orders/:id", zValidator("json", replaceOrderSchema), async (c) => {
   const user = c.get("user");

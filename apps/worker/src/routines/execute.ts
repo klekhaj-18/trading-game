@@ -183,6 +183,7 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
           alpacaOrderId: order.id,
           userId: input.userId,
           routineRunId: runId,
+          source: "ai",
           symbol: order.symbol,
           side: order.side,
           qty: order.qty,

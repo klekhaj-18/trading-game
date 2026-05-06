@@ -15,6 +15,13 @@
       "when": 1776503016678,
       "tag": "0001_low_dust",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1778088050659,
+      "tag": "0002_fluffy_ben_urich",
+      "breakpoints": true
     }
   ]
 }
