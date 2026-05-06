@@ -11,6 +11,8 @@ import { operationalPlans, playbooks, trades, userIntents, users } from "../db/s
 import { open } from "../lib/crypto";
 import { fetchPositions, type AlpacaCreds } from "../lib/alpaca";
 import { requireSession, type AppEnv } from "../middleware/session";
+import { loadCoachMarketContext } from "../data/factors";
+import { loadGameState } from "../data/game-state";
 
 export const coachRoutes = new Hono<AppEnv>();
 
@@ -29,13 +31,22 @@ coachRoutes.post("/chat", zValidator("json", coachChatRequestSchema), async (c) 
     stream.onAbort(() => controller.abort());
 
     try {
-      const ctx = await loadCoachContext(c.env, user.id);
-      const result = await coachTurn(c.env, messages, ctx, {
-        signal: controller.signal,
-        onText: async (delta) => {
-          await stream.writeSSE({ event: "text", data: JSON.stringify({ delta }) });
+      const { ctx, creds } = await loadCoachContext(c.env, user.id);
+      const result = await coachTurn(
+        c.env,
+        messages,
+        ctx,
+        {
+          signal: controller.signal,
+          onText: async (delta) => {
+            await stream.writeSSE({ event: "text", data: JSON.stringify({ delta }) });
+          },
+          onLookup: async (event) => {
+            await stream.writeSSE({ event: "lookup", data: JSON.stringify(event) });
+          },
         },
-      });
+        { creds },
+      );
 
       await stream.writeSSE({
         event: "done",
@@ -63,7 +74,7 @@ coachRoutes.post("/chat", zValidator("json", coachChatRequestSchema), async (c) 
   });
 });
 
-async function loadCoachContext(env: Env, userId: string): Promise<CoachContext> {
+async function loadCoachContext(env: Env, userId: string): Promise<{ ctx: CoachContext; creds: AlpacaCreds | null }> {
   const db = getDb(env.DB);
   const nowSec = Math.floor(Date.now() / 1000);
 
@@ -129,6 +140,7 @@ async function loadCoachContext(env: Env, userId: string): Promise<CoachContext>
 
   const [userRow] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   let positions: CoachContext["positions"] = [];
+  let creds: AlpacaCreds | null = null;
   if (userRow?.alpacaKeyCiphertext && userRow.alpacaKeyIv && userRow.alpacaSecretCiphertext && userRow.alpacaSecretIv) {
     try {
       const apiKey = await open(
@@ -139,7 +151,7 @@ async function loadCoachContext(env: Env, userId: string): Promise<CoachContext>
         { ciphertext: userRow.alpacaSecretCiphertext, iv: userRow.alpacaSecretIv },
         env.ALPACA_KEY_ENCRYPTION_KEY,
       );
-      const creds: AlpacaCreds = { apiKey, apiSecret };
+      creds = { apiKey, apiSecret };
       const ap = await fetchPositions(creds);
       positions = ap.map((p) => ({
         symbol: p.symbol,
@@ -153,7 +165,24 @@ async function loadCoachContext(env: Env, userId: string): Promise<CoachContext>
     }
   }
 
-  return {
+  // Build market context + game state in parallel with what we already have.
+  // marketContext requires Alpaca creds (for news + bars) and an approved/pending plan
+  // (for the universe). gameState is DB-only — always derivable.
+  const universeSymbols = approvedPlan?.universe?.map((u) => u.symbol).filter(Boolean) ?? [];
+  const [marketContext, gameState] = await Promise.all([
+    creds && universeSymbols.length > 0
+      ? loadCoachMarketContext(env, creds, universeSymbols).catch((err) => {
+          console.warn("coach context: market context load failed", err);
+          return null;
+        })
+      : Promise.resolve(null),
+    loadGameState(env, userId).catch((err) => {
+      console.warn("coach context: game state load failed", err);
+      return null;
+    }),
+  ]);
+
+  const ctx: CoachContext = {
     playbook: pbRow
       ? { goalText: pbRow.goalText, playbookText: pbRow.playbookText, version: pbRow.version }
       : null,
@@ -168,5 +197,8 @@ async function loadCoachContext(env: Env, userId: string): Promise<CoachContext>
       source: f.source === "direct" ? "direct" : "ai",
     })),
     pendingIntents,
+    marketContext,
+    gameState,
   };
+  return { ctx, creds };
 }

@@ -14,8 +14,8 @@ import type {
   HaikuDecision,
   PlacedOrderSummary,
   RoutineKind,
-  RoutineSlot,
   RoutineStatus,
+  ScheduledTouchpoint,
   ValidationFailure,
 } from "shared/routine";
 import type { RaceStateResponse } from "shared/race";
@@ -78,7 +78,7 @@ export interface RosterResponse {
 export interface AdminTestRun {
   id: string;
   kind: RoutineKind;
-  scheduledSlot: RoutineSlot | null;
+  scheduledSlot: ScheduledTouchpoint | null;
   oneShotInstruction: string | null;
   claudeModel: string | null;
   claudeReasoning: string | null;

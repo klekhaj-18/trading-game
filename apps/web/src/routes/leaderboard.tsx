@@ -247,7 +247,7 @@ function Ticker({ events }: { events: PublicTickerEvent[] }) {
               <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: hex }} />
               <span className="font-semibold text-zinc-200">{e.displayName}</span>
               <span className="text-zinc-400">
-                fired {e.kind === "on_demand" ? "on-demand" : (e.scheduledSlot ? SLOT_LABEL[e.scheduledSlot] : "scheduled")}
+                fired {e.kind === "on_demand" ? "on-demand" : (e.scheduledSlot && e.scheduledSlot !== "warm" ? SLOT_LABEL[e.scheduledSlot] : "scheduled")}
               </span>
               <span className="text-zinc-600 tabular-digits ml-auto">
                 {formatRelative(e.startedAt - Math.floor(Date.now() / 1000))}

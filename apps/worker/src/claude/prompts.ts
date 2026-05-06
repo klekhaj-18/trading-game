@@ -1,5 +1,6 @@
 export const OPUS_MODEL = "claude-opus-4-7";
 export const SONNET_MODEL = "claude-sonnet-4-6";
+export const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 
 export const PLAYBOOK_SYSTEM_PROMPT = `You are the strategist for a player in the **Trading Grand Prix**, a 30-day paper-trading competition between four friends using Alpaca paper accounts. Your job: translate a player's natural-language trading **goal** and **playbook** into a concrete, auditable **operational plan** that will drive five scheduled routines per trading day.
 

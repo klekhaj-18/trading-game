@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or, isNull } from "drizzle-orm";
 import type { PublicTickerEvent, PublicTickerResponse } from "shared/leaderboard";
 import type { TeamColor } from "shared/auth";
-import type { RoutineSlot } from "shared/routine";
+import type { ScheduledTouchpoint } from "shared/routine";
 import { getDb } from "../db/client";
 import { routineRuns, users } from "../db/schema";
 import { requireSession, type AppEnv } from "../middleware/session";
@@ -25,7 +25,13 @@ eventsRoutes.get("/ticker", async (c) => {
       startedAt: routineRuns.startedAt,
     })
     .from(routineRuns)
-    .where(inArray(routineRuns.kind, ["scheduled", "on_demand"]))
+    .where(
+      and(
+        inArray(routineRuns.kind, ["scheduled", "on_demand"]),
+        // Public ticker is for race activity, not data-prep. Hide warm rows.
+        or(isNull(routineRuns.scheduledSlot), ne(routineRuns.scheduledSlot, "warm")),
+      ),
+    )
     .orderBy(desc(routineRuns.startedAt))
     .limit(limit);
 
@@ -50,7 +56,7 @@ eventsRoutes.get("/ticker", async (c) => {
         displayName: u.displayName,
         teamColor: u.teamColor as TeamColor,
         kind: r.kind as "scheduled" | "on_demand",
-        scheduledSlot: r.scheduledSlot as RoutineSlot | null,
+        scheduledSlot: r.scheduledSlot as ScheduledTouchpoint | null,
         startedAt: r.startedAt,
       },
     ];

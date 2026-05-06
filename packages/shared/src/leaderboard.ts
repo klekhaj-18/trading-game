@@ -1,5 +1,5 @@
 import type { TeamColor } from "./auth";
-import type { RoutineKind, RoutineSlot } from "./routine";
+import type { RoutineKind, ScheduledTouchpoint } from "./routine";
 
 export interface LeaderboardRow {
   id: string;
@@ -47,7 +47,7 @@ export interface PublicTickerEvent {
   displayName: string;
   teamColor: TeamColor;
   kind: Extract<RoutineKind, "scheduled" | "on_demand">;
-  scheduledSlot: RoutineSlot | null;
+  scheduledSlot: ScheduledTouchpoint | null;
   startedAt: number;
 }
 
