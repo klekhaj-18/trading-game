@@ -27,7 +27,9 @@ HOW THIS GAME ACTUALLY WORKS (never ask the player about any of this — it is f
 
 STYLE:
 - Pit-wall engineer, not life coach. Direct, F1-flavored when natural.
-- Short messages (2-4 sentences). One sharp question or one specific suggestion per turn.
+- ALWAYS open with one short sentence acknowledging what you're about to do — e.g. "Looking at your AAPL position now," "Pulling up your universe," "Reviewing your sizing rule." This sentence streams to the player FIRST so they know you're working. Never start with a multi-sentence preamble.
+- After the ack, keep the rest tight — 2-3 sentences plus the tool call when one's needed.
+- One sharp question or one specific suggestion per turn.
 - When you propose a plan revision, name the specific change in the rationale ("dropping NVDA cuts your universe to 4 names — your max_positions=5 is now slack; bumping it to 4 keeps the cap meaningful").
 - When the plan is well-tuned and the player is fishing, say so plainly. Don't manufacture changes.
 
@@ -165,31 +167,57 @@ function renderContext(ctx: CoachContext): string {
   return lines.join("\n");
 }
 
-export async function coachTurn(env: Env, messages: CoachMessage[], ctx: CoachContext): Promise<CoachTurnResult> {
+export interface CoachStreamHandlers {
+  onText?: (delta: string) => void | Promise<void>;
+  signal?: AbortSignal;
+}
+
+export async function coachTurn(
+  env: Env,
+  messages: CoachMessage[],
+  ctx: CoachContext,
+  handlers: CoachStreamHandlers = {},
+): Promise<CoachTurnResult> {
   const client = anthropic(env);
   const contextBlock = renderContext(ctx);
-  const response = await client.messages.create({
-    model: OPUS_MODEL,
-    max_tokens: 8192,
-    thinking: { type: "adaptive" },
-    output_config: { effort: "medium" },
-    system: [
-      {
-        type: "text",
-        text: COACH_SYSTEM,
-        cache_control: { type: "ephemeral" },
-      },
-      {
-        type: "text",
-        text: contextBlock,
-      },
-    ],
-    tools: [commitDraftTool, proposePlaybookRevisionTool, proposePlanRevisionTool],
-    tool_choice: { type: "auto" },
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
-  });
 
-  const textBlocks = response.content
+  const stream = client.messages.stream(
+    {
+      model: OPUS_MODEL,
+      max_tokens: 8192,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
+      system: [
+        {
+          type: "text",
+          text: COACH_SYSTEM,
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: contextBlock,
+        },
+      ],
+      tools: [commitDraftTool, proposePlaybookRevisionTool, proposePlanRevisionTool],
+      tool_choice: { type: "auto" },
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    },
+    { signal: handlers.signal },
+  );
+
+  for await (const event of stream) {
+    if (
+      event.type === "content_block_delta" &&
+      event.delta.type === "text_delta" &&
+      handlers.onText
+    ) {
+      await handlers.onText(event.delta.text);
+    }
+  }
+
+  const finalMessage = await stream.finalMessage();
+
+  const textBlocks = finalMessage.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("\n\n");
@@ -197,7 +225,7 @@ export async function coachTurn(env: Env, messages: CoachMessage[], ctx: CoachCo
   let draft: CoachDraft | null = null;
   let playbookRevision: CoachPlaybookRevision | null = null;
   let planRevision: CoachPlanRevision | null = null;
-  for (const block of response.content) {
+  for (const block of finalMessage.content) {
     if (block.type !== "tool_use") continue;
     const input = block.input as Record<string, unknown>;
     if (block.name === "commit_draft") {
@@ -223,10 +251,10 @@ export async function coachTurn(env: Env, messages: CoachMessage[], ctx: CoachCo
     playbookRevision,
     planRevision,
     usage: {
-      input_tokens: response.usage.input_tokens,
-      output_tokens: response.usage.output_tokens,
-      cache_read_input_tokens: response.usage.cache_read_input_tokens ?? null,
-      cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? null,
+      input_tokens: finalMessage.usage.input_tokens,
+      output_tokens: finalMessage.usage.output_tokens,
+      cache_read_input_tokens: finalMessage.usage.cache_read_input_tokens ?? null,
+      cache_creation_input_tokens: finalMessage.usage.cache_creation_input_tokens ?? null,
     },
   };
 }

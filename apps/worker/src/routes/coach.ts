@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { coachChatRequestSchema } from "shared/coach";
@@ -20,21 +21,46 @@ coachRoutes.post("/chat", zValidator("json", coachChatRequestSchema), async (c) 
   if (messages[messages.length - 1]?.role !== "user") {
     return c.json({ error: "last_message_must_be_user" }, 400);
   }
-  try {
-    const user = c.get("user");
-    const ctx = await loadCoachContext(c.env, user.id);
-    const result = await coachTurn(c.env, messages, ctx);
-    return c.json({
-      assistantText: result.assistantText,
-      draft: result.draft,
-      playbookRevision: result.playbookRevision,
-      planRevision: result.planRevision,
-      usage: result.usage,
-    });
-  } catch (err) {
-    console.error("coach chat error", err);
-    return c.json({ error: "coach_failed", message: "Coach had a hiccup. Try again." }, 502);
-  }
+
+  const user = c.get("user");
+
+  return streamSSE(c, async (stream) => {
+    const controller = new AbortController();
+    stream.onAbort(() => controller.abort());
+
+    try {
+      const ctx = await loadCoachContext(c.env, user.id);
+      const result = await coachTurn(c.env, messages, ctx, {
+        signal: controller.signal,
+        onText: async (delta) => {
+          await stream.writeSSE({ event: "text", data: JSON.stringify({ delta }) });
+        },
+      });
+
+      await stream.writeSSE({
+        event: "done",
+        data: JSON.stringify({
+          assistantText: result.assistantText,
+          draft: result.draft,
+          playbookRevision: result.playbookRevision,
+          planRevision: result.planRevision,
+          usage: result.usage,
+        }),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        // Client disconnected — nothing to send back.
+        return;
+      }
+      console.error("coach chat error", err);
+      await stream.writeSSE({
+        event: "error",
+        data: JSON.stringify({
+          message: err instanceof Error ? err.message : "Coach had a hiccup. Try again.",
+        }),
+      });
+    }
+  });
 });
 
 async function loadCoachContext(env: Env, userId: string): Promise<CoachContext> {
