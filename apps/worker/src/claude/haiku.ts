@@ -2,12 +2,16 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { OperationalPlan } from "shared/playbook";
 import type { HaikuDecision, HaikuDecisionsOutput, RoutineSlot } from "shared/routine";
 import { anthropic } from "./client";
+import { OPUS_MODEL, SONNET_MODEL } from "./prompts";
 import type { AccountContext, MarketSnapshot } from "../trading/snapshot";
 
-// The routine-execution model. We started on Haiku 4.5 (cheap, rule-following) and moved
-// to Sonnet 4.6 once broader-market / news context was added — that context only pays off
-// if the executing model can interpret it.
-export const HAIKU_MODEL = "claude-sonnet-4-6";
+// Premarket and close are the highest-leverage slots — premarket sets the day's posture
+// from overnight news, close protects gains and stages tomorrow. The three intraday slots
+// execute against an already-set plan, where Sonnet keeps up. Opus elsewhere.
+function modelForSlot(slot: RoutineSlot): string {
+  return slot === "premarket" || slot === "close" ? OPUS_MODEL : SONNET_MODEL;
+}
+
 export const SUBMIT_DECISIONS_TOOL = "submit_decisions";
 
 const ROUTINE_SYSTEM_PROMPT = `You are the autonomous trader for a player in the **Trading Grand Prix** — a 30-day paper-trading competition between four friends. You run FIVE times per trading day (premarket, open, midmorning, afternoon, close) and execute the player's approved operational plan against their Alpaca paper account.
@@ -261,8 +265,9 @@ function renderSnapshotLayer(snapshot: MarketSnapshot, slot: RoutineSlot, oneSho
 
 export async function runRoutineLlm(env: Env, input: RoutineInput): Promise<RoutineLlmResult> {
   const client = anthropic(env);
+  const model = modelForSlot(input.slot);
   const response = await client.messages.create({
-    model: HAIKU_MODEL,
+    model,
     max_tokens: 4096,
     system: [
       {
@@ -320,7 +325,7 @@ export async function runRoutineLlm(env: Env, input: RoutineInput): Promise<Rout
 
   return {
     decisions,
-    model: HAIKU_MODEL,
+    model,
     usage: {
       input_tokens: response.usage.input_tokens,
       output_tokens: response.usage.output_tokens,

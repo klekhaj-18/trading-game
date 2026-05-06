@@ -1,8 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CoachDraft, CoachMessage } from "shared/coach";
 import { anthropic } from "./client";
-
-export const SONNET_MODEL = "claude-sonnet-4-6";
+import { OPUS_MODEL } from "./prompts";
 
 const COACH_SYSTEM = `You are the pit-wall engineer for the **Trading Grand Prix** — a 30-day paper-trading competition between four friends. The winner is whoever posts the highest account equity on day 30. You are interviewing ONE player to extract the **goal** and **playbook** that Claude Opus 4.7 will execute on their behalf for the next 30 days.
 
@@ -76,7 +75,7 @@ export interface CoachTurnResult {
 export async function coachTurn(env: Env, messages: CoachMessage[]): Promise<CoachTurnResult> {
   const client = anthropic(env);
   const response = await client.messages.create({
-    model: SONNET_MODEL,
+    model: OPUS_MODEL,
     max_tokens: 2048,
     thinking: { type: "adaptive" },
     output_config: { effort: "medium" },

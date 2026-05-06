@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { PlaybookCurrentResponse } from "shared/playbook";
 import { ApiError, api, type EquityPoint, type OpenOrderSummary, type PositionSummary, type RoutineRunSummary } from "../lib/api";
 import { cn } from "../lib/utils";
 
@@ -12,6 +14,7 @@ export function PitWallPage() {
     qc.invalidateQueries({ queryKey: ["me"] });
   }, [qc]);
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me });
+  const pbQ = useQuery({ queryKey: ["playbook"], queryFn: api.playbookCurrent });
   const posQ = useQuery({ queryKey: ["me", "positions"], queryFn: api.mePositions, refetchInterval: 30_000 });
   const ordersQ = useQuery({ queryKey: ["me", "open-orders"], queryFn: api.meOpenOrders, refetchInterval: 30_000 });
   const equityQ = useQuery({
@@ -37,6 +40,8 @@ export function PitWallPage() {
           {meQ.data?.user.displayName ?? "—"}
         </div>
       </div>
+
+      <StrategyStatusStrip data={pbQ.data} />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Stat label="Equity" value={fmtUsd(equity)} />
@@ -876,6 +881,35 @@ function RoutineRow({ run }: { run: RoutineRunSummary }) {
       )}
     </div>
   );
+}
+
+function StrategyStatusStrip({ data }: { data: PlaybookCurrentResponse | undefined }) {
+  if (!data?.playbook) return null;
+  const plan = data.plan;
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-race-border)] bg-[var(--color-race-panel)] px-3 py-2">
+      <div className="text-xs text-zinc-400 min-w-0">
+        <span className="text-zinc-200 font-semibold">Strategy v{data.playbook.version}</span>
+        {plan?.approvalState === "approved" && plan.approvedAt != null && (
+          <> · approved {fmtDate(plan.approvedAt)}</>
+        )}
+        {plan?.approvalState === "pending" && (
+          <> · <span className="text-amber-400">pending review</span></>
+        )}
+        <span className="hidden sm:inline text-zinc-500"> · runs as-is for all 5 daily slots</span>
+      </div>
+      <Link
+        to="/playbook"
+        className="shrink-0 text-[10px] rounded border border-zinc-700 px-2 py-1 uppercase tracking-wider text-zinc-300 hover:text-white hover:border-zinc-500"
+      >
+        Revise →
+      </Link>
+    </div>
+  );
+}
+
+function fmtDate(unixSec: number): string {
+  return new Date(unixSec * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function fmtUsd(n: number): string {
