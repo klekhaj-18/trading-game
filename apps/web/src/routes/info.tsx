@@ -25,8 +25,8 @@ const SECTIONS: FaqSection[] = [
           <>
             A 30-day paper-trading competition for four friends. Each player writes a strategy in
             plain English. Claude reads it before each routine, decides what to buy or sell, and
-            places paper orders through Alpaca. Highest equity on Lap 30 wins. F1 themed because we
-            wanted it to feel like a season, not a slog.
+            places paper orders through Alpaca. Highest <span className="font-semibold">% return</span>{" "}
+            on Lap 30 wins. F1 themed because we wanted it to feel like a season, not a slog.
           </>
         ),
       },
@@ -45,8 +45,19 @@ const SECTIONS: FaqSection[] = [
         q: "Who wins?",
         a: (
           <>
-            Whoever's Alpaca paper equity is highest on Lap 30. No bonuses, no penalties, no
-            weighting. Final equity, full stop.
+            Whoever has the highest <span className="font-semibold">% return</span> on Lap 30. We
+            rank by percentage so the leaderboard is fair across players whose Alpaca paper
+            accounts started with different balances — what matters is how much you grew it, not
+            the dollar number underneath. No bonuses, no penalties, no weighting.
+          </>
+        ),
+        technical: (
+          <>
+            Each player's baseline = the earliest <code>equity_snapshots</code> row at-or-after{" "}
+            <code>competitionStartAt</code>. Return = <code>(equity / baseline) - 1</code>. Computed
+            in <code>getPublicLeaderboardRow</code>; client sorts by{" "}
+            <code>returnPct</code> desc, falls back to display name when null (pre-race or before
+            the first post-start snapshot lands).
           </>
         ),
       },
@@ -107,26 +118,31 @@ const SECTIONS: FaqSection[] = [
         a: (
           <>
             Five trading routines per US trading day — premarket, open, mid-morning, afternoon,
-            and pre-close. Plus a sixth "warm" slot 30 minutes before premarket that pre-fetches
-            market data so trading routines don't wait. The next fire-time shows on the
-            Leaderboard banner. See the next item for what each slot does.
+            and pre-close. Plus a "warm" slot 30 minutes before premarket that pre-fetches
+            market data so trading routines don't wait, and an equity-tick that snapshots your
+            Alpaca account every 5 minutes during market hours so the leaderboard moves in near
+            real time. The next routine fire-time shows on the Leaderboard banner. See the next
+            item for what each slot does.
           </>
         ),
         technical: (
           <>
-            Six Cloudflare Cron Triggers, fixed in UTC. Race-gated (no fires pre-race /
+            Seven Cloudflare Cron Triggers, fixed in UTC. Race-gated (no fires pre-race /
             post-race), weekday-gated (Mon–Fri). Holidays are absorbed by Alpaca's market-closed
-            signal — routines run, but validators downgrade live orders to "plan" actions.
+            signal — routines run, but validators downgrade live orders to "plan" actions. The
+            5-min equity tick (<code>*/5 13-20 * * 1-5</code>) only hits Alpaca for the snapshot;
+            no Claude, no factor refresh — invisible on the Anthropic budget.
           </>
         ),
       },
       {
-        q: "What does each of the 6 routines actually do?",
+        q: "What does each cron trigger actually do?",
         a: (
           <>
             <p className="mb-3">
-              Five trading slots that touch the market, plus one "warm" slot that just refreshes
-              cached data. Times below are in <span className="font-semibold">US Eastern (EDT)</span>{" "}
+              Five trading slots that touch the market, one "warm" slot that just refreshes cached
+              data, plus an every-5-min equity tick that pulls your Alpaca balance for the
+              leaderboard. Times below are in <span className="font-semibold">US Eastern (EDT)</span>{" "}
               — the cron is fixed in UTC and tuned for daylight time, so during EST (Nov–Mar) every
               slot fires <span className="italic">one hour earlier</span> in ET.
             </p>
@@ -206,7 +222,7 @@ const SECTIONS: FaqSection[] = [
                     <td className="py-2 pr-3 text-[11px]">Sonnet 4.6</td>
                     <td className="py-2 text-zinc-400">Sizing review, reassess stops.</td>
                   </tr>
-                  <tr>
+                  <tr className="border-b border-zinc-900">
                     <td className="py-2 pr-3 font-mono text-[11px]">19:45</td>
                     <td className="py-2 pr-3 font-mono text-[11px]">15:45</td>
                     <td className="py-2 pr-3">
@@ -220,12 +236,25 @@ const SECTIONS: FaqSection[] = [
                       another high-leverage slot, uses Opus.
                     </td>
                   </tr>
+                  <tr>
+                    <td className="py-2 pr-3 font-mono text-[11px]">*/5 13–20</td>
+                    <td className="py-2 pr-3 font-mono text-[11px]">9:00–16:55</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded bg-zinc-800/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-zinc-300">tick</span>
+                    </td>
+                    <td className="py-2 pr-3 text-[11px] text-zinc-400">none</td>
+                    <td className="py-2 text-zinc-400">
+                      Pure equity snapshot — fetches your Alpaca balance and writes one row to{" "}
+                      <code>equity_snapshots</code>. No Claude, no orders, no factor work. This is
+                      what makes the leaderboard move in near real time during market hours.
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>
             <p className="mt-3 text-xs text-zinc-400">
-              Equity snapshots also piggyback on each slot — that's why the leaderboard updates
-              5–6 times per trading day, not continuously.
+              Equity snapshots also still piggyback on each routine slot (cheap, harmless overlap)
+              — but the every-5-min tick is what keeps the leaderboard live between routine fires.
             </p>
           </>
         ),
@@ -491,15 +520,17 @@ const SECTIONS: FaqSection[] = [
         q: "What can my friends see?",
         a: (
           <>
-            Only your display name, team color, current paper equity, equity curve (24h / 7d /
-            30d), and your rank. That's it.
+            Only your display name, team color, your <span className="font-semibold">% return
+            since race start</span> (the headline number on the leaderboard), current paper equity,
+            equity curve (24h / 7d / 30d), and your rank. That's it.
           </>
         ),
         technical: (
           <>
             Public projection in <code>getPublicLeaderboardRow</code> physically selects only those
-            fields. Holdings, playbook, plan, reasoning, and trades are never selected by the
-            public endpoint — never just masked.
+            fields and computes <code>returnPct</code> from a per-user race-start baseline.
+            Holdings, playbook, plan, reasoning, and trades are never selected by the public
+            endpoint — never just masked.
           </>
         ),
       },
@@ -530,7 +561,7 @@ const SECTIONS: FaqSection[] = [
         q: "What gets revealed at the chequered flag?",
         a: (
           <>
-            The winner — based on final equity — and final standings for everyone. That's it.{" "}
+            The winner — based on final % return — and final standings for everyone. That's it.{" "}
             <span className="font-semibold">No playbooks, plans, holdings, or trades are revealed
             to other players.</span>{" "}
             Privacy is permanent.
