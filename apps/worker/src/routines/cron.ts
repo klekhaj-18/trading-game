@@ -11,6 +11,7 @@ import { currentRaceState } from "../trading/race";
 import { refreshFactors } from "../data/factors";
 
 const FACTOR_WARM_CRON = "45 12 * * 1-5";
+const EQUITY_TICK_CRON = "*/5 13-20 * * 1-5";
 
 const SLOT_BY_CRON: Record<string, RoutineSlot> = {
   "15 13 * * 1-5": "premarket",
@@ -24,6 +25,13 @@ export async function handleScheduled(cron: string, env: Env, ctx: ExecutionCont
   const state = await currentRaceState(env);
   if (state !== "in_race") {
     console.log(`cron ${cron}: skipped (race_state=${state})`);
+    return;
+  }
+
+  // 5-min equity tick during US market hours: snapshot only, no Claude / no factor refresh.
+  // Drives a near-live leaderboard without touching the Anthropic budget.
+  if (cron === EQUITY_TICK_CRON) {
+    ctx.waitUntil(captureEquitySnapshots(env));
     return;
   }
 

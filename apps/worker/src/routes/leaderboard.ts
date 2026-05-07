@@ -12,6 +12,7 @@ import type { TeamColor } from "shared/auth";
 import { getDb } from "../db/client";
 import { equitySnapshots, trades, users } from "../db/schema";
 import { requireSession, type AppEnv } from "../middleware/session";
+import { getRaceConfig } from "../trading/race";
 
 export const leaderboardRoutes = new Hono<AppEnv>();
 
@@ -19,15 +20,22 @@ leaderboardRoutes.use("*", requireSession);
 
 leaderboardRoutes.get("/", async (c) => {
   const db = getDb(c.env.DB);
-  const playerRows = await db
-    .select({ id: users.id, displayName: users.displayName, teamColor: users.teamColor })
-    .from(users)
-    .orderBy(asc(users.createdAt));
+  const [playerRows, race] = await Promise.all([
+    db
+      .select({ id: users.id, displayName: users.displayName, teamColor: users.teamColor })
+      .from(users)
+      .orderBy(asc(users.createdAt)),
+    getRaceConfig(c.env),
+  ]);
 
   const nowSec = Math.floor(Date.now() / 1000);
+  const raceStartedAt =
+    race.competitionStartAt != null && race.competitionStartAt <= nowSec
+      ? race.competitionStartAt
+      : null;
   const players: LeaderboardRow[] = [];
   for (const p of playerRows) {
-    const projection = await getPublicLeaderboardRow(db, p, nowSec);
+    const projection = await getPublicLeaderboardRow(db, p, nowSec, raceStartedAt);
     players.push(projection);
   }
 
@@ -78,6 +86,7 @@ async function getPublicLeaderboardRow(
   db: DbClient,
   player: { id: string; displayName: string; teamColor: string },
   nowSec: number,
+  raceStartedAt: number | null,
 ): Promise<LeaderboardRow> {
   const [latest] = await db
     .select({ equity: equitySnapshots.equity, t: equitySnapshots.capturedAt })
@@ -89,12 +98,18 @@ async function getPublicLeaderboardRow(
   const equity = latest ? Number(latest.equity) : null;
   const lastUpdatedAt = latest?.t ?? null;
 
-  const [hourAgo, dayAgo, weekAgo, flow] = await Promise.all([
+  const [hourAgo, dayAgo, weekAgo, baseline, flow] = await Promise.all([
     equityAtOrBefore(db, player.id, nowSec - 60 * 60),
     equityAtOrBefore(db, player.id, nowSec - 24 * 60 * 60),
     equityAtOrBefore(db, player.id, nowSec - 7 * 24 * 60 * 60),
+    raceStartedAt != null ? equityAtOrAfter(db, player.id, raceStartedAt) : Promise.resolve(null),
     netRealizedBySource(db, player.id),
   ]);
+
+  const returnPct =
+    baseline != null && baseline > 0 && equity != null
+      ? ((equity - baseline) / baseline) * 100
+      : null;
 
   return {
     id: player.id,
@@ -105,6 +120,8 @@ async function getPublicLeaderboardRow(
     equity24hAgo: dayAgo,
     equity7dAgo: weekAgo,
     lastUpdatedAt,
+    baselineEquity: baseline,
+    returnPct,
     strategyNetRealized: flow.strategyNetRealized,
     directNetRealized: flow.directNetRealized,
     strategyTradeCount: flow.strategyTradeCount,
@@ -163,6 +180,22 @@ async function equityAtOrBefore(
       and(eq(equitySnapshots.userId, userId), lte(equitySnapshots.capturedAt, atSec)),
     )
     .orderBy(desc(equitySnapshots.capturedAt))
+    .limit(1);
+  return row ? Number(row.equity) : null;
+}
+
+async function equityAtOrAfter(
+  db: DbClient,
+  userId: string,
+  atSec: number,
+): Promise<number | null> {
+  const [row] = await db
+    .select({ equity: equitySnapshots.equity })
+    .from(equitySnapshots)
+    .where(
+      and(eq(equitySnapshots.userId, userId), gte(equitySnapshots.capturedAt, atSec)),
+    )
+    .orderBy(asc(equitySnapshots.capturedAt))
     .limit(1);
   return row ? Number(row.equity) : null;
 }
