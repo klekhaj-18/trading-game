@@ -54,6 +54,11 @@ leaderboardRoutes.get("/equity-series", async (c) => {
   const since = nowSec - windowSec;
 
   const db = getDb(c.env.DB);
+  const race = await getRaceConfig(c.env);
+  const raceStartedAt =
+    race.competitionStartAt != null && race.competitionStartAt <= nowSec
+      ? race.competitionStartAt
+      : null;
   const playerRows = await db
     .select({ id: users.id, displayName: users.displayName, teamColor: users.teamColor })
     .from(users)
@@ -61,18 +66,22 @@ leaderboardRoutes.get("/equity-series", async (c) => {
 
   const series: LeaderboardEquitySeries[] = [];
   for (const p of playerRows) {
-    const snaps = await db
-      .select({ t: equitySnapshots.capturedAt, equity: equitySnapshots.equity })
-      .from(equitySnapshots)
-      .where(
-        and(eq(equitySnapshots.userId, p.id), gte(equitySnapshots.capturedAt, since)),
-      )
-      .orderBy(asc(equitySnapshots.capturedAt));
+    const [snaps, baseline] = await Promise.all([
+      db
+        .select({ t: equitySnapshots.capturedAt, equity: equitySnapshots.equity })
+        .from(equitySnapshots)
+        .where(
+          and(eq(equitySnapshots.userId, p.id), gte(equitySnapshots.capturedAt, since)),
+        )
+        .orderBy(asc(equitySnapshots.capturedAt)),
+      raceStartedAt != null ? equityAtOrAfter(db, p.id, raceStartedAt) : Promise.resolve(null),
+    ]);
     series.push({
       userId: p.id,
       displayName: p.displayName,
       teamColor: p.teamColor as TeamColor,
       points: snaps.map((s) => ({ t: s.t, equity: Number(s.equity) })),
+      baselineEquity: baseline,
     });
   }
 

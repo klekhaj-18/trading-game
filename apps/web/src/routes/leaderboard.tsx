@@ -6,7 +6,7 @@ import type { LeaderboardRange, LeaderboardRow, PublicTickerEvent } from "shared
 import type { RoutineSlot } from "shared/routine";
 import { api } from "../lib/api";
 import { cn } from "../lib/utils";
-import { EquityChart } from "../components/equity-chart";
+import { EquityChart, type EquityChartMode } from "../components/equity-chart";
 
 const SLOT_LABEL: Record<RoutineSlot, string> = {
   premarket: "Pre-market",
@@ -26,6 +26,7 @@ const SLOT_HOUR_ET: Record<RoutineSlot, [number, number]> = {
 
 export function LeaderboardPage() {
   const [range, setRange] = useState<LeaderboardRange>("24h");
+  const [chartMode, setChartMode] = useState<EquityChartMode>("percent");
 
   const boardQ = useQuery({
     queryKey: ["leaderboard"],
@@ -78,26 +79,44 @@ export function LeaderboardPage() {
       </div>
 
       <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-4">
-        <div className="flex items-baseline justify-between mb-3">
+        <div className="flex items-baseline justify-between mb-3 gap-3 flex-wrap">
           <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase">Telemetry</div>
-          <div className="flex gap-1 text-[10px]">
-            {(["24h", "7d", "30d"] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRange(r)}
-                className={cn(
-                  "rounded px-2 py-0.5 uppercase tracking-wider",
-                  range === r
-                    ? "bg-zinc-100 text-zinc-900 font-semibold"
-                    : "text-zinc-500 hover:text-zinc-300",
-                )}
-              >
-                {r}
-              </button>
-            ))}
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1 text-[10px]">
+              {(["percent", "equity"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setChartMode(m)}
+                  className={cn(
+                    "rounded px-2 py-0.5 uppercase tracking-wider",
+                    chartMode === m
+                      ? "bg-zinc-100 text-zinc-900 font-semibold"
+                      : "text-zinc-500 hover:text-zinc-300",
+                  )}
+                >
+                  {m === "percent" ? "%" : "$"}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-1 text-[10px]">
+              {(["24h", "7d", "30d"] as const).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRange(r)}
+                  className={cn(
+                    "rounded px-2 py-0.5 uppercase tracking-wider",
+                    range === r
+                      ? "bg-zinc-100 text-zinc-900 font-semibold"
+                      : "text-zinc-500 hover:text-zinc-300",
+                  )}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-        <EquityChart series={seriesQ.data?.series ?? []} height={280} />
+        <EquityChart series={seriesQ.data?.series ?? []} height={280} mode={chartMode} />
       </div>
 
       <Ticker events={tickerQ.data?.events ?? []} />

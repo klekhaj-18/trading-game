@@ -36,6 +36,8 @@ export interface LeaderboardEquitySeries {
   displayName: string;
   teamColor: TeamColor;
   points: LeaderboardEquityPoint[];
+  /** Earliest snapshot at-or-after race start. 0% baseline for the % return chart; null pre-race. */
+  baselineEquity: number | null;
 }
 
 export const LEADERBOARD_RANGES = ["24h", "7d", "30d"] as const;
