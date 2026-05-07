@@ -34,10 +34,11 @@ binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = true
 
-# 5 routine slots + 1 pre-premarket factor warm (Mon-Fri, UTC matches US EDT during DST).
-# 12:45 UTC (8:45 ET) warms the union universe (news/bars/sentiment/technicals) so the
-# 13:15 premarket routine consumes already-warm KV data instead of doing the heavy
-# refresh inline. Equity snapshots piggyback on each slot via handleScheduled.
+# 5 routine slots + 1 pre-premarket factor warm + 1 every-5min equity tick.
+# Mon-Fri, UTC aligned to US EDT during DST. 12:45 UTC (8:45 ET) warms the union
+# universe so the 13:15 premarket routine consumes already-warm KV data. The
+# */5 13-20 tick captures equity-only snapshots every 5 min during market hours
+# (no Claude / no factor refresh) so the leaderboard moves in near-real time.
 [triggers]
 crons = [
   "45 12 * * 1-5",
@@ -45,7 +46,8 @@ crons = [
   "35 13 * * 1-5",
   "30 15 * * 1-5",
   "0 18 * * 1-5",
-  "45 19 * * 1-5"
+  "45 19 * * 1-5",
+  "*/5 13-20 * * 1-5"
 ]
 
 [dev]

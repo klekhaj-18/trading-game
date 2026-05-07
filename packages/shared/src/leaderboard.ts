@@ -10,6 +10,10 @@ export interface LeaderboardRow {
   equity24hAgo: number | null;
   equity7dAgo: number | null;
   lastUpdatedAt: number | null;
+  /** Earliest snapshot at-or-after race start. Null pre-race or before the first post-start cron. */
+  baselineEquity: number | null;
+  /** Total % return from baselineEquity. Drives ranking; null when baseline is null. */
+  returnPct: number | null;
   /** Net realized cash flow from AI-mediated trades (sell notional - buy notional). */
   strategyNetRealized: number;
   /** Net realized cash flow from direct (discretionary) trades. */

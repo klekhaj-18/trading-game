@@ -112,9 +112,13 @@ interface Ranked {
 
 function rankRows(rows: LeaderboardRow[]): Ranked[] {
   const sorted = [...rows].sort((a, b) => {
-    const aE = a.equity ?? -Infinity;
-    const bE = b.equity ?? -Infinity;
-    if (bE !== aE) return bE - aE;
+    const aHas = a.returnPct != null;
+    const bHas = b.returnPct != null;
+    if (aHas && bHas) {
+      if (b.returnPct! !== a.returnPct!) return b.returnPct! - a.returnPct!;
+    } else if (aHas !== bHas) {
+      return aHas ? -1 : 1;
+    }
     return a.displayName.localeCompare(b.displayName);
   });
   return sorted.map((row, i) => ({ row, rank: i + 1 }));
@@ -122,20 +126,27 @@ function rankRows(rows: LeaderboardRow[]): Ranked[] {
 
 function LeaderboardRowCard({ row, rank }: { row: LeaderboardRow; rank: number }) {
   const hex = TEAM_COLOR_META[row.teamColor as TeamColor]?.hex ?? "#888";
-  const change24h =
-    row.equity != null && row.equity24hAgo != null ? row.equity - row.equity24hAgo : null;
   const changePct24h =
-    change24h != null && row.equity24hAgo && row.equity24hAgo > 0
-      ? (change24h / row.equity24hAgo) * 100
+    row.equity != null && row.equity24hAgo != null && row.equity24hAgo > 0
+      ? ((row.equity - row.equity24hAgo) / row.equity24hAgo) * 100
       : null;
 
-  const tone =
-    change24h == null
+  const returnTone =
+    row.returnPct == null
       ? "text-zinc-500"
-      : change24h > 0
+      : row.returnPct > 0
         ? "text-emerald-400"
-        : change24h < 0
+        : row.returnPct < 0
           ? "text-red-400"
+          : "text-zinc-300";
+
+  const dayTone =
+    changePct24h == null
+      ? "text-zinc-500"
+      : changePct24h > 0
+        ? "text-emerald-400/80"
+        : changePct24h < 0
+          ? "text-red-400/80"
           : "text-zinc-400";
 
   return (
@@ -154,17 +165,14 @@ function LeaderboardRowCard({ row, rank }: { row: LeaderboardRow; rank: number }
         </div>
       </div>
       <div className="text-right shrink-0 sm:min-w-[140px]">
-        <div className="text-base sm:text-xl font-black tabular-digits">
+        <div className={cn("text-lg sm:text-2xl font-black tabular-digits", returnTone)}>
+          {row.returnPct != null ? fmtSignedPct(row.returnPct) : "—"}
+        </div>
+        <div className="text-[10px] sm:text-xs tabular-digits text-zinc-500 mt-0.5">
           {row.equity != null ? fmtUsd(row.equity) : "—"}
         </div>
-        <div className={cn("text-[10px] sm:text-xs tabular-digits mt-0.5", tone)}>
-          {change24h != null
-            ? `${change24h >= 0 ? "+" : "−"}${fmtUsdAbs(change24h)}${
-                changePct24h != null
-                  ? ` (${changePct24h >= 0 ? "+" : "−"}${Math.abs(changePct24h).toFixed(2)}%)`
-                  : ""
-              }`
-            : "no 24h data"}
+        <div className={cn("text-[10px] sm:text-xs tabular-digits mt-0.5", dayTone)}>
+          {changePct24h != null ? `24h ${fmtSignedPct(changePct24h)}` : "no 24h data"}
         </div>
         {(row.strategyTradeCount > 0 || row.directTradeCount > 0) && (
           <div className="text-[9px] sm:text-[10px] tabular-digits text-zinc-500 mt-0.5">
@@ -178,6 +186,11 @@ function LeaderboardRowCard({ row, rank }: { row: LeaderboardRow; rank: number }
       </div>
     </div>
   );
+}
+
+function fmtSignedPct(p: number): string {
+  const sign = p > 0 ? "+" : p < 0 ? "−" : "";
+  return `${sign}${Math.abs(p).toFixed(2)}%`;
 }
 
 function fmtSignedShort(n: number): string {
@@ -300,8 +313,4 @@ function formatRelative(deltaSec: number): string {
 
 function fmtUsd(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function fmtUsdAbs(n: number): string {
-  return `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
