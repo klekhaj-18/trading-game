@@ -477,7 +477,7 @@ type CronTrigger = {
 };
 
 const CRON_TRIGGERS: CronTrigger[] = [
-  { label: "Warm (12:45)", cron: "45 12 * * MON-FRI", hint: "Refresh union-universe factors only — fast, runs in background", mode: "async" },
+  { label: "Warm (12:45 daily)", cron: "45 12 * * *", hint: "Refresh union-universe factors only — runs every day incl. weekends, fast, in background", mode: "async" },
   { label: "Premarket (13:15)", cron: "15 13 * * MON-FRI", hint: "Run premarket routine for all approved players — awaits completion (~60-90s)", mode: "sync" },
   { label: "Open (13:35)", cron: "35 13 * * MON-FRI", hint: "Run open routine for all approved players — awaits completion", mode: "sync" },
   { label: "Midmorning (15:30)", cron: "30 15 * * MON-FRI", hint: "Run midmorning routine for all approved players — awaits completion", mode: "sync" },

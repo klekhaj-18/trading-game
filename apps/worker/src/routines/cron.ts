@@ -10,7 +10,7 @@ import { executeRoutine } from "./execute";
 import { currentRaceState } from "../trading/race";
 import { refreshFactors } from "../data/factors";
 
-const FACTOR_WARM_CRON = "45 12 * * MON-FRI";
+const FACTOR_WARM_CRON = "45 12 * * *";
 const EQUITY_TICK_CRON = "*/5 13-20 * * MON-FRI";
 
 const SLOT_BY_CRON: Record<string, RoutineSlot> = {
