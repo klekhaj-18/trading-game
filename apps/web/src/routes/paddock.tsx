@@ -427,6 +427,71 @@ function ConfirmModal({
   );
 }
 
+const CRON_TRIGGERS: Array<{ label: string; cron: string; hint: string }> = [
+  { label: "Warm (12:45)", cron: "45 12 * * 1-5", hint: "Refresh union-universe factors only" },
+  { label: "Premarket (13:15)", cron: "15 13 * * 1-5", hint: "Run premarket routine for all approved players" },
+  { label: "Open (13:35)", cron: "35 13 * * 1-5", hint: "Run open routine for all approved players" },
+  { label: "Midmorning (15:30)", cron: "30 15 * * 1-5", hint: "Run midmorning routine for all approved players" },
+  { label: "Afternoon (18:00)", cron: "0 18 * * 1-5", hint: "Run afternoon routine for all approved players" },
+  { label: "Close (19:45)", cron: "45 19 * * 1-5", hint: "Run close routine for all approved players" },
+];
+
+function ManualCronTriggerPanel() {
+  const [lastFired, setLastFired] = useState<{ label: string; cron: string; at: number } | null>(null);
+  const m = useMutation({
+    mutationFn: ({ cron }: { label: string; cron: string }) => api.adminTriggerCron(cron),
+    onSuccess: (_res, vars) =>
+      setLastFired({ label: vars.label, cron: vars.cron, at: Date.now() }),
+  });
+  const err = m.error as ApiError | null;
+  return (
+    <div>
+      <div className="text-xs tracking-[0.3em] text-zinc-500 uppercase">All-players</div>
+      <div className="text-2xl font-black tracking-tight mt-1">Manual cron trigger</div>
+      <div className="mt-1 text-sm text-zinc-500">
+        Fire a slot for <strong>every approved + Alpaca-linked player</strong>, exactly as the scheduler
+        would. Use after a missed cron (e.g. trigger drift, deploy gap). Race must be <em>in_race</em>;
+        otherwise the worker skips.
+      </div>
+      <div className="mt-3 rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-4 space-y-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {CRON_TRIGGERS.map((t) => (
+            <button
+              key={t.cron}
+              title={t.hint}
+              onClick={() => m.mutate({ label: t.label, cron: t.cron })}
+              disabled={m.isPending}
+              className={cn(
+                "rounded border border-zinc-700 bg-black/40 px-3 py-2 text-xs tracking-wider uppercase",
+                "hover:border-zinc-500 disabled:opacity-40 text-left",
+              )}
+            >
+              {m.isPending && m.variables?.cron === t.cron ? "firing…" : t.label}
+            </button>
+          ))}
+        </div>
+        {err && (
+          <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+            {err.message}
+          </div>
+        )}
+        {lastFired && !err && (
+          <div className="rounded border border-emerald-900/60 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
+            Fired <span className="font-mono">{lastFired.label}</span>
+            <span className="text-zinc-500"> · cron </span>
+            <span className="font-mono">{lastFired.cron}</span>
+            <span className="text-zinc-500"> · {new Date(lastFired.at).toLocaleTimeString()}</span>
+            <div className="mt-1 text-[10px] text-zinc-500">
+              Runs land in <span className="font-mono">routine_runs</span> with kind=
+              <span className="font-mono">scheduled</span>; check Pit Wall radio per player.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function PaddockPage() {
   const qc = useQueryClient();
   const runsQ = useQuery({
@@ -460,6 +525,8 @@ export function PaddockPage() {
   return (
     <div className="space-y-6">
       <RaceControlPanel />
+
+      <ManualCronTriggerPanel />
 
       <div>
         <div className="text-xs tracking-[0.3em] text-zinc-500 uppercase">Solo-test</div>

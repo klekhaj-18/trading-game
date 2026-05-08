@@ -35,6 +35,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Verify cron-trigger config (wrangler.toml ↔ cron.ts)
+        working-directory: apps/worker
+        run: pnpm verify:crons
+
       - name: Build web
         run: pnpm --filter web build
 
