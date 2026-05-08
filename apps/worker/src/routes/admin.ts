@@ -1,12 +1,10 @@
 import { Hono } from "hono";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
-import { fireTestRoutineSchema } from "shared/routine";
 import type { OperationalPlan } from "shared/playbook";
 import { z } from "zod";
 import { getDb } from "../db/client";
 import { operationalPlans, routineRuns, trades, users } from "../db/schema";
-import { executeRoutine } from "../routines/execute";
 import { captureEquitySnapshots, handleScheduled } from "../routines/cron";
 import {
   AlpacaAuthError,
@@ -40,22 +38,6 @@ adminRoutes.use("*", requireSession, async (c, next) => {
   if (!user.isAdmin) return c.json({ error: "admin_only" }, 403);
   await next();
 });
-
-adminRoutes.post(
-  "/fire-test-routine",
-  zValidator("json", fireTestRoutineSchema),
-  async (c) => {
-    const user = c.get("user");
-    const { slot, oneShotInstruction } = c.req.valid("json");
-    const result = await executeRoutine(c.env, {
-      userId: user.id,
-      slot,
-      kind: "admin_test",
-      oneShotInstruction,
-    });
-    return c.json(result);
-  },
-);
 
 adminRoutes.get("/roster", async (c) => {
   const db = getDb(c.env.DB);
@@ -100,25 +82,49 @@ adminRoutes.get("/roster", async (c) => {
   return c.json({ players, maxPlayers: 4 as const });
 });
 
-adminRoutes.get("/test-runs", async (c) => {
-  const user = c.get("user");
+adminRoutes.get("/routines", async (c) => {
+  const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 200);
   const db = getDb(c.env.DB);
   const rows = await db
-    .select()
+    .select({
+      run: routineRuns,
+      displayName: users.displayName,
+    })
     .from(routineRuns)
-    .where(and(eq(routineRuns.userId, user.id), eq(routineRuns.kind, "admin_test")))
+    .leftJoin(users, eq(users.id, routineRuns.userId))
     .orderBy(desc(routineRuns.startedAt))
-    .limit(20);
-  return c.json({ runs: rows.map(serializeRun) });
+    .limit(limit);
+  return c.json({
+    runs: rows.map(({ run, displayName }) => ({
+      ...serializeRun(run),
+      userId: run.userId,
+      displayName: displayName ?? "(unknown)",
+    })),
+  });
 });
 
-adminRoutes.post("/reset-admin-test-data", async (c) => {
+adminRoutes.post("/routines/:id/kill", async (c) => {
   const user = c.get("user");
+  const id = c.req.param("id");
   const db = getDb(c.env.DB);
+  const [existing] = await db
+    .select({ status: routineRuns.status })
+    .from(routineRuns)
+    .where(eq(routineRuns.id, id))
+    .limit(1);
+  if (!existing) return c.json({ error: "not_found" }, 404);
+  if (existing.status !== "running") {
+    return c.json({ ok: true, killed: 0, alreadyTerminal: true });
+  }
   await db
-    .delete(routineRuns)
-    .where(and(eq(routineRuns.userId, user.id), eq(routineRuns.kind, "admin_test")));
-  return c.json({ ok: true });
+    .update(routineRuns)
+    .set({
+      status: "error",
+      errorText: `killed by admin ${user.displayName}`,
+      completedAt: Math.floor(Date.now() / 1000),
+    })
+    .where(and(eq(routineRuns.id, id), eq(routineRuns.status, "running")));
+  return c.json({ ok: true, killed: 1 });
 });
 
 adminRoutes.post("/capture-equity-now", async (c) => {

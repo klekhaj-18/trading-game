@@ -15,7 +15,6 @@ import type {
 } from "shared/intent";
 import type { PnlSplitResponse } from "shared/pnl";
 import type {
-  FireTestRoutineInput,
   RoutineDecision,
   PlacedOrderSummary,
   RoutineKind,
@@ -75,8 +74,6 @@ export interface EquityPoint {
   longMarketValue: number;
 }
 
-export interface RoutineRunSummary extends AdminTestRun {}
-
 export interface RosterPlayer {
   id: string;
   displayName: string;
@@ -93,7 +90,7 @@ export interface RosterResponse {
   maxPlayers: 4;
 }
 
-export interface AdminTestRun {
+export interface RoutineRunSummary {
   id: string;
   kind: RoutineKind;
   scheduledSlot: ScheduledTouchpoint | null;
@@ -113,6 +110,11 @@ export interface AdminTestRun {
   };
   startedAt: number;
   completedAt: number | null;
+}
+
+export interface AdminRoutineRow extends RoutineRunSummary {
+  userId: string;
+  displayName: string;
 }
 
 export class ApiError extends Error {
@@ -201,22 +203,14 @@ export const api = {
       body: JSON.stringify({ messages }),
     }),
 
-  fireTestRoutine: (input: FireTestRoutineInput) =>
-    request<{
-      runId: string;
-      status: RoutineStatus;
-      decisions: RoutineDecision[] | null;
-      validationFailures: ValidationFailure[];
-      orders: PlacedOrderSummary[];
-      reasoning: string | null;
-      errorText: string | null;
-      usage: { input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null };
-    }>("/api/admin/fire-test-routine", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+  adminListRoutines: (limit = 50) =>
+    request<{ runs: AdminRoutineRow[] }>(`/api/admin/routines?limit=${limit}`),
 
-  adminTestRuns: () => request<{ runs: AdminTestRun[] }>("/api/admin/test-runs"),
+  adminKillRoutine: (id: string) =>
+    request<{ ok: true; killed: 0 | 1; alreadyTerminal?: boolean }>(
+      `/api/admin/routines/${encodeURIComponent(id)}/kill`,
+      { method: "POST" },
+    ),
 
   adminTriggerCron: (cron: string) =>
     request<{ ok: true; cron: string }>("/api/admin/trigger-cron", {
@@ -263,9 +257,6 @@ export const api = {
       };
       openOrders: { ok: boolean; count?: number; error?: string };
     }>(`/api/admin/users/${encodeURIComponent(userId)}/alpaca-resync`, { method: "POST" }),
-
-  resetAdminTestData: () =>
-    request<{ ok: true }>("/api/admin/reset-admin-test-data", { method: "POST" }),
 
   mePositions: () => request<{ positions: PositionSummary[]; error?: string }>("/api/me/positions"),
 

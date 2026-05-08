@@ -135,7 +135,12 @@ export function PitWallPage() {
       <IntentsSection
         pending={intentsQ.data?.pending ?? []}
         recent={intentsQ.data?.recent ?? []}
-        hasRunningRoutine={(runsQ.data?.runs ?? []).some((r) => r.status === "running")}
+        hasRunningRoutine={(() => {
+          const staleCutoff = Math.floor(Date.now() / 1000) - 600;
+          return (runsQ.data?.runs ?? []).some(
+            (r) => r.status === "running" && r.startedAt > staleCutoff,
+          );
+        })()}
         raceState={raceQ.data?.state ?? null}
       />
 
