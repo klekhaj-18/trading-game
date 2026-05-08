@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TEAM_COLOR_META, type TeamColor } from "shared/auth";
-import { api, ApiError, type AdminRoutineRow, type RosterPlayer } from "../lib/api";
+import { api, ApiError, type AdminRoutineSummary, type RosterPlayer } from "../lib/api";
 import { cn } from "../lib/utils";
 
 const RACE_DURATION_DAYS = 30;
@@ -577,7 +577,7 @@ function AllRoutinesPanel() {
     queryKey: ["admin", "routines"],
     queryFn: () => api.adminListRoutines(50),
     refetchInterval: (q) => {
-      const data = q.state.data as { runs: AdminRoutineRow[] } | undefined;
+      const data = q.state.data as { runs: AdminRoutineSummary[] } | undefined;
       if (data?.runs.some((r) => r.status === "running")) return 2000;
       return false;
     },
@@ -748,16 +748,18 @@ function TestOrderPanel() {
   );
 }
 
+// Slim cross-user routine row. Status + kill only — no expand. Per-row
+// content is intentionally not fetched (see /admin/routines on the worker).
+// Owners get the rich view on Pit Wall.
 function RunCard({
   run,
   onKill,
   killPending,
 }: {
-  run: AdminRoutineRow;
+  run: AdminRoutineSummary;
   onKill?: () => void;
   killPending?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const started = new Date(run.startedAt * 1000);
   const statusClass =
     run.status === "succeeded"
@@ -773,12 +775,9 @@ function RunCard({
               : "text-zinc-400 border-zinc-800 bg-black/40";
 
   return (
-    <div className="rounded border border-zinc-800 bg-[var(--color-race-panel)] p-4">
+    <div className="rounded border border-zinc-800 bg-[var(--color-race-panel)] px-3 py-2">
       <div className="flex items-baseline justify-between gap-3">
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="flex items-baseline gap-3 min-w-0 flex-1 text-left"
-        >
+        <div className="flex items-baseline gap-3 min-w-0 flex-1">
           <span className="text-xs font-bold text-zinc-200 truncate">{run.displayName}</span>
           <span className="text-xs tracking-wider text-zinc-500 uppercase font-mono">
             {run.scheduledSlot ?? "—"}
@@ -795,17 +794,7 @@ function RunCard({
             {started.toLocaleTimeString()}
           </span>
           <span className="text-[10px] text-zinc-600">{run.kind}</span>
-          {run.orders.length > 0 && (
-            <span className="text-[10px] text-emerald-400">
-              {run.orders.length} order{run.orders.length === 1 ? "" : "s"}
-            </span>
-          )}
-          {run.validationFailures.length > 0 && (
-            <span className="text-[10px] text-red-400">
-              {run.validationFailures.length} failure{run.validationFailures.length === 1 ? "" : "s"}
-            </span>
-          )}
-        </button>
+        </div>
         {onKill && (
           <button
             onClick={onKill}
@@ -815,130 +804,7 @@ function RunCard({
             {killPending ? "killing…" : "kill"}
           </button>
         )}
-        <button onClick={() => setOpen((v) => !v)} className="text-zinc-600 px-1">
-          {open ? "▾" : "▸"}
-        </button>
       </div>
-
-      {open && (
-        <div className="mt-4 space-y-4 text-sm">
-          {run.errorText && (
-            <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-red-200">
-              <div className="text-[10px] uppercase tracking-wider text-red-400 mb-1">Error</div>
-              {run.errorText}
-            </div>
-          )}
-
-          {run.oneShotInstruction && (
-            <div>
-              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
-                One-shot instruction
-              </div>
-              <div className="rounded bg-black/60 px-3 py-2 text-zinc-300 whitespace-pre-wrap">
-                {run.oneShotInstruction}
-              </div>
-            </div>
-          )}
-
-          {run.claudeReasoning && (
-            <div>
-              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
-                Claude's reasoning · {run.claudeModel}
-              </div>
-              <div className="rounded bg-black/60 px-3 py-2 text-zinc-300 whitespace-pre-wrap leading-relaxed">
-                {run.claudeReasoning}
-              </div>
-              <div className="mt-2 text-[10px] text-zinc-600 tabular-digits">
-                tokens: input={run.tokens.input ?? 0}  output={run.tokens.output ?? 0}  cache_read={run.tokens.cacheRead ?? 0}  cache_write={run.tokens.cacheWrite ?? 0}
-              </div>
-            </div>
-          )}
-
-          {run.decisions && run.decisions.length > 0 && (
-            <div>
-              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
-                Decisions ({run.decisions.length})
-              </div>
-              <div className="space-y-1.5">
-                {run.decisions.map((d, i) => (
-                  <div
-                    key={i}
-                    className="rounded border border-zinc-800 bg-black/40 px-3 py-2 text-xs"
-                  >
-                    <div className="flex items-baseline gap-2 font-mono">
-                      <span
-                        className={cn(
-                          "font-bold uppercase",
-                          d.action === "buy" && "text-emerald-400",
-                          d.action === "sell" && "text-red-400",
-                          d.action === "plan" && "text-amber-400",
-                          d.action === "hold" && "text-zinc-500",
-                        )}
-                      >
-                        {d.action}
-                      </span>
-                      <span className="font-bold">{d.symbol}</span>
-                      {d.action !== "plan" && d.action !== "hold" && (
-                        <>
-                          <span className="text-zinc-500">qty</span>
-                          <span>{d.qty}</span>
-                          <span className="text-zinc-500">{d.order_type}</span>
-                          {d.order_type === "limit" && d.limit_price != null && (
-                            <span>@${d.limit_price.toFixed(2)}</span>
-                          )}
-                          <span className="text-zinc-500">{d.time_in_force}</span>
-                        </>
-                      )}
-                    </div>
-                    <div className="mt-1 text-zinc-400">{d.rationale}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {run.validationFailures.length > 0 && (
-            <div>
-              <div className="text-[10px] tracking-wider text-red-400 uppercase mb-1">
-                Validation failures
-              </div>
-              <div className="space-y-1 text-xs">
-                {run.validationFailures.map((f, i) => (
-                  <div key={i} className="rounded bg-red-950/30 border border-red-900/40 px-3 py-2">
-                    <span className="font-mono font-bold text-red-300">{f.symbol}</span>
-                    <span className="text-zinc-400"> — {f.reason}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {run.orders.length > 0 && (
-            <div>
-              <div className="text-[10px] tracking-wider text-emerald-400 uppercase mb-1">
-                Orders placed
-              </div>
-              <div className="space-y-1 text-xs">
-                {run.orders.map((o, i) => (
-                  <div
-                    key={i}
-                    className="rounded bg-emerald-950/20 border border-emerald-900/40 px-3 py-2 font-mono"
-                  >
-                    <span className="font-bold">{o.side.toUpperCase()}</span>{" "}
-                    <span>{o.symbol}</span>{" "}
-                    <span className="text-zinc-400">qty={o.qty}</span>{" "}
-                    <span className="text-zinc-400">status={o.orderStatus}</span>
-                    {o.filledAvgPrice && (
-                      <span className="text-zinc-400"> @${o.filledAvgPrice}</span>
-                    )}
-                    <span className="text-zinc-600 ml-2">id={o.alpacaOrderId.slice(0, 8)}…</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

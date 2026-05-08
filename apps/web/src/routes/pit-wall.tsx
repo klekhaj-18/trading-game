@@ -1041,25 +1041,33 @@ function RoutineRow({ run }: { run: RoutineRunSummary }) {
   const started = new Date(run.startedAt * 1000);
   const statusClass =
     run.status === "succeeded"
-      ? "text-emerald-300"
+      ? "text-emerald-300 border-emerald-900/60 bg-emerald-950/30"
       : run.status === "partial"
-        ? "text-amber-300"
-        : run.status === "validation_failed"
-          ? "text-red-300"
-          : run.status === "error"
-            ? "text-red-300"
-            : "text-zinc-400";
+        ? "text-amber-300 border-amber-900/60 bg-amber-950/30"
+        : run.status === "running"
+          ? "text-amber-200 border-amber-700 bg-amber-950/30"
+          : run.status === "validation_failed"
+            ? "text-red-300 border-red-900/60 bg-red-950/30"
+            : run.status === "error"
+              ? "text-red-200 border-red-900/80 bg-red-950/50"
+              : "text-zinc-400 border-zinc-800 bg-black/40";
+
   return (
-    <div className="rounded border border-zinc-800 bg-[var(--color-race-panel)] text-sm">
+    <div className="rounded border border-zinc-800 bg-[var(--color-race-panel)] p-3">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-baseline justify-between gap-3 px-3 py-2"
+        className="w-full flex items-baseline justify-between gap-3 text-left"
       >
-        <div className="flex items-baseline gap-2 min-w-0">
-          <span className="text-[10px] tracking-wider text-zinc-500 uppercase font-mono">
+        <div className="flex items-baseline gap-2 min-w-0 flex-wrap">
+          <span className="text-xs tracking-wider text-zinc-500 uppercase font-mono">
             {run.scheduledSlot ?? "on-demand"}
           </span>
-          <span className={cn("text-[10px] font-bold uppercase tracking-wider", statusClass)}>
+          <span
+            className={cn(
+              "text-[10px] font-bold uppercase tracking-wider rounded px-2 py-0.5 border",
+              statusClass,
+            )}
+          >
             {run.status}
           </span>
           <span className="text-[10px] text-zinc-600 tabular-digits">
@@ -1067,14 +1075,137 @@ function RoutineRow({ run }: { run: RoutineRunSummary }) {
           </span>
           <span className="text-[10px] text-zinc-600">{run.kind}</span>
           {run.orders.length > 0 && (
-            <span className="text-[10px] text-emerald-400">{run.orders.length} order(s)</span>
+            <span className="text-[10px] text-emerald-400">
+              {run.orders.length} order{run.orders.length === 1 ? "" : "s"}
+            </span>
+          )}
+          {run.validationFailures.length > 0 && (
+            <span className="text-[10px] text-red-400">
+              {run.validationFailures.length} failure{run.validationFailures.length === 1 ? "" : "s"}
+            </span>
           )}
         </div>
         <span className="text-zinc-600">{open ? "▾" : "▸"}</span>
       </button>
-      {open && run.claudeReasoning && (
-        <div className="px-3 py-2 border-t border-zinc-900 text-xs text-zinc-400 whitespace-pre-wrap">
-          {run.claudeReasoning}
+
+      {open && (
+        <div className="mt-3 space-y-3 text-sm">
+          {run.errorText && (
+            <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-red-200">
+              <div className="text-[10px] uppercase tracking-wider text-red-400 mb-1">Error</div>
+              {run.errorText}
+            </div>
+          )}
+
+          {run.oneShotInstruction && (
+            <div>
+              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
+                Your instruction
+              </div>
+              <div className="rounded bg-black/60 px-3 py-2 text-zinc-300 whitespace-pre-wrap">
+                {run.oneShotInstruction}
+              </div>
+            </div>
+          )}
+
+          {run.claudeReasoning && (
+            <div>
+              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
+                Claude's reasoning
+                {run.claudeModel && <span className="text-zinc-600"> · {run.claudeModel}</span>}
+              </div>
+              <div className="rounded bg-black/60 px-3 py-2 text-zinc-300 whitespace-pre-wrap leading-relaxed">
+                {run.claudeReasoning}
+              </div>
+              <div className="mt-2 text-[10px] text-zinc-600 tabular-digits">
+                tokens: input={run.tokens.input ?? 0}  output={run.tokens.output ?? 0}  cache_read={run.tokens.cacheRead ?? 0}  cache_write={run.tokens.cacheWrite ?? 0}
+              </div>
+            </div>
+          )}
+
+          {run.decisions && run.decisions.length > 0 && (
+            <div>
+              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
+                Decisions ({run.decisions.length})
+              </div>
+              <div className="space-y-1.5">
+                {run.decisions.map((d, i) => (
+                  <div
+                    key={i}
+                    className="rounded border border-zinc-800 bg-black/40 px-3 py-2 text-xs"
+                  >
+                    <div className="flex items-baseline gap-2 font-mono">
+                      <span
+                        className={cn(
+                          "font-bold uppercase",
+                          d.action === "buy" && "text-emerald-400",
+                          d.action === "sell" && "text-red-400",
+                          d.action === "plan" && "text-amber-400",
+                          d.action === "hold" && "text-zinc-500",
+                        )}
+                      >
+                        {d.action}
+                      </span>
+                      <span className="font-bold">{d.symbol}</span>
+                      {d.action !== "plan" && d.action !== "hold" && (
+                        <>
+                          <span className="text-zinc-500">qty</span>
+                          <span>{d.qty}</span>
+                          <span className="text-zinc-500">{d.order_type}</span>
+                          {d.order_type === "limit" && d.limit_price != null && (
+                            <span>@${d.limit_price.toFixed(2)}</span>
+                          )}
+                          <span className="text-zinc-500">{d.time_in_force}</span>
+                        </>
+                      )}
+                    </div>
+                    <div className="mt-1 text-zinc-400">{d.rationale}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {run.validationFailures.length > 0 && (
+            <div>
+              <div className="text-[10px] tracking-wider text-red-400 uppercase mb-1">
+                Validation failures
+              </div>
+              <div className="space-y-1 text-xs">
+                {run.validationFailures.map((f, i) => (
+                  <div key={i} className="rounded bg-red-950/30 border border-red-900/40 px-3 py-2">
+                    <span className="font-mono font-bold text-red-300">{f.symbol}</span>
+                    <span className="text-zinc-400"> — {f.reason}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {run.orders.length > 0 && (
+            <div>
+              <div className="text-[10px] tracking-wider text-emerald-400 uppercase mb-1">
+                Orders placed
+              </div>
+              <div className="space-y-1 text-xs">
+                {run.orders.map((o, i) => (
+                  <div
+                    key={i}
+                    className="rounded bg-emerald-950/20 border border-emerald-900/40 px-3 py-2 font-mono"
+                  >
+                    <span className="font-bold">{o.side.toUpperCase()}</span>{" "}
+                    <span>{o.symbol}</span>{" "}
+                    <span className="text-zinc-400">qty={o.qty}</span>{" "}
+                    <span className="text-zinc-400">status={o.orderStatus}</span>
+                    {o.filledAvgPrice && (
+                      <span className="text-zinc-400"> @${o.filledAvgPrice}</span>
+                    )}
+                    <span className="text-zinc-600 ml-2">id={o.alpacaOrderId.slice(0, 8)}…</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
