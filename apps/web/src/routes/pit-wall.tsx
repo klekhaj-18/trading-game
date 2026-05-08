@@ -3,7 +3,23 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IntentSummary } from "shared/intent";
 import type { PlaybookCurrentResponse } from "shared/playbook";
-import { ApiError, api, type EquityPoint, type OpenOrderSummary, type PositionSummary, type RecentFillSummary, type RoutineRunSummary } from "../lib/api";
+import type { RoutineDecision } from "shared/routine";
+import {
+  ApiError,
+  api,
+  type AccountContext,
+  type EquityPoint,
+  type MarketSnapshot,
+  type OpenOrderSummary,
+  type PlanUniverseEntry,
+  type PositionSummary,
+  type RecentFillSummary,
+  type RoutineRunDetail,
+  type RoutineRunSummary,
+  type SentimentLabel,
+  type SnapshotRegimeCard,
+  type SnapshotSymbol,
+} from "../lib/api";
 import { cn } from "../lib/utils";
 
 type Range = "24h" | "7d" | "30d";
@@ -1036,8 +1052,82 @@ function RoutineList({ runs }: { runs: RoutineRunSummary[] }) {
   );
 }
 
+// =====================================================================
+// Routine row — V5 layout
+//
+// Header row (always visible) is a thin one-liner: slot · status · time ·
+// counts. Expanding lazily fetches /api/me/routine-runs/:id which includes
+// the parsed marketSnapshotJson + accountContextJson + planUniverse from
+// the active operationalPlan. Each decision becomes a 3-line decision card
+// (action, qty/type, rationale) with a collapsible Details footer that
+// pulls per-symbol context from the snapshot. A routine-level macro regime
+// card sits above the cards.
+// =====================================================================
+
+const ACTION_ICON: Record<RoutineDecision["action"], string> = {
+  buy: "▲",
+  sell: "▼",
+  plan: "◇",
+  hold: "○",
+};
+
+const ACTION_TEXT_CLASS: Record<RoutineDecision["action"], string> = {
+  buy: "text-emerald-400",
+  sell: "text-red-400",
+  plan: "text-amber-400",
+  hold: "text-zinc-500",
+};
+
+const ACTION_BG_CLASS: Record<RoutineDecision["action"], string> = {
+  buy: "bg-emerald-950/20 border-emerald-900/40",
+  sell: "bg-red-950/20 border-red-900/40",
+  plan: "bg-amber-950/20 border-amber-900/40",
+  hold: "bg-zinc-900/40 border-zinc-800",
+};
+
+type DecisionOutcome =
+  | { kind: "filled"; label: string; className: string }
+  | { kind: "rejected"; label: string; reason: string; className: string }
+  | { kind: "noop"; label: string; className: string }
+  | null;
+
+function outcomeFor(run: RoutineRunSummary, idx: number): DecisionOutcome {
+  const order = run.orders.find((o) => o.decisionIndex === idx);
+  if (order) {
+    return {
+      kind: "filled",
+      label: `✓ ${order.orderStatus.toUpperCase()}${order.filledAvgPrice ? ` $${order.filledAvgPrice}` : ""}`,
+      className: "text-emerald-300 border-emerald-700 bg-emerald-950/40",
+    };
+  }
+  const failure = run.validationFailures.find((f) => f.decisionIndex === idx);
+  if (failure) {
+    return {
+      kind: "rejected",
+      label: "✗ REJECTED",
+      reason: failure.reason,
+      className: "text-red-300 border-red-700 bg-red-950/40",
+    };
+  }
+  const action = run.decisions?.[idx]?.action;
+  if (action === "plan" || action === "hold") {
+    return {
+      kind: "noop",
+      label: action === "plan" ? "PLAN ONLY" : "HOLD",
+      className: "text-zinc-500 border-zinc-800 bg-zinc-900/30",
+    };
+  }
+  return null;
+}
+
 function RoutineRow({ run }: { run: RoutineRunSummary }) {
   const [open, setOpen] = useState(false);
+  const detailQ = useQuery({
+    queryKey: ["me", "routine-runs", run.id],
+    queryFn: () => api.meRoutineRun(run.id),
+    enabled: open,
+    staleTime: 60_000,
+  });
   const started = new Date(run.startedAt * 1000);
   const statusClass =
     run.status === "succeeded"
@@ -1088,128 +1178,862 @@ function RoutineRow({ run }: { run: RoutineRunSummary }) {
         <span className="text-zinc-600">{open ? "▾" : "▸"}</span>
       </button>
 
-      {open && (
-        <div className="mt-3 space-y-3 text-sm">
-          {run.errorText && (
-            <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-red-200">
-              <div className="text-[10px] uppercase tracking-wider text-red-400 mb-1">Error</div>
-              {run.errorText}
-            </div>
-          )}
+      {open && <RoutineDetail run={run} detail={detailQ.data?.run ?? null} loading={detailQ.isLoading} />}
+    </div>
+  );
+}
 
-          {run.oneShotInstruction && (
-            <div>
-              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
-                Your instruction
-              </div>
-              <div className="rounded bg-black/60 px-3 py-2 text-zinc-300 whitespace-pre-wrap">
-                {run.oneShotInstruction}
-              </div>
-            </div>
-          )}
+function RoutineDetail({
+  run,
+  detail,
+  loading,
+}: {
+  run: RoutineRunSummary;
+  detail: RoutineRunDetail | null;
+  loading: boolean;
+}) {
+  // detail is what we display from once it's loaded; until then we fall back
+  // to the summary row so users don't see a blank expanded panel.
+  const source = detail ?? run;
+  const snapshot = detail?.marketSnapshot ?? null;
+  const account = detail?.accountContext ?? null;
+  const planUniverse = detail?.planUniverse ?? [];
 
-          {run.claudeReasoning && (
-            <div>
-              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
-                Claude's reasoning
-                {run.claudeModel && <span className="text-zinc-600"> · {run.claudeModel}</span>}
-              </div>
-              <div className="rounded bg-black/60 px-3 py-2 text-zinc-300 whitespace-pre-wrap leading-relaxed">
-                {run.claudeReasoning}
-              </div>
-              <div className="mt-2 text-[10px] text-zinc-600 tabular-digits">
-                tokens: input={run.tokens.input ?? 0}  output={run.tokens.output ?? 0}  cache_read={run.tokens.cacheRead ?? 0}  cache_write={run.tokens.cacheWrite ?? 0}
-              </div>
-            </div>
-          )}
+  const symbolMap = useMemo(() => {
+    const m = new Map<string, SnapshotSymbol>();
+    for (const s of snapshot?.symbols ?? []) m.set(s.symbol.toUpperCase(), s);
+    return m;
+  }, [snapshot]);
 
-          {run.decisions && run.decisions.length > 0 && (
-            <div>
-              <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
-                Decisions ({run.decisions.length})
-              </div>
-              <div className="space-y-1.5">
-                {run.decisions.map((d, i) => (
-                  <div
-                    key={i}
-                    className="rounded border border-zinc-800 bg-black/40 px-3 py-2 text-xs"
-                  >
-                    <div className="flex items-baseline gap-2 font-mono">
-                      <span
-                        className={cn(
-                          "font-bold uppercase",
-                          d.action === "buy" && "text-emerald-400",
-                          d.action === "sell" && "text-red-400",
-                          d.action === "plan" && "text-amber-400",
-                          d.action === "hold" && "text-zinc-500",
-                        )}
-                      >
-                        {d.action}
-                      </span>
-                      <span className="font-bold">{d.symbol}</span>
-                      {d.action !== "plan" && d.action !== "hold" && (
-                        <>
-                          <span className="text-zinc-500">qty</span>
-                          <span>{d.qty}</span>
-                          <span className="text-zinc-500">{d.order_type}</span>
-                          {d.order_type === "limit" && d.limit_price != null && (
-                            <span>@${d.limit_price.toFixed(2)}</span>
-                          )}
-                          <span className="text-zinc-500">{d.time_in_force}</span>
-                        </>
-                      )}
-                    </div>
-                    <div className="mt-1 text-zinc-400">{d.rationale}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+  const planMap = useMemo(() => {
+    const m = new Map<string, PlanUniverseEntry>();
+    for (const p of planUniverse) m.set(p.symbol.toUpperCase(), p);
+    return m;
+  }, [planUniverse]);
 
-          {run.validationFailures.length > 0 && (
-            <div>
-              <div className="text-[10px] tracking-wider text-red-400 uppercase mb-1">
-                Validation failures
-              </div>
-              <div className="space-y-1 text-xs">
-                {run.validationFailures.map((f, i) => (
-                  <div key={i} className="rounded bg-red-950/30 border border-red-900/40 px-3 py-2">
-                    <span className="font-mono font-bold text-red-300">{f.symbol}</span>
-                    <span className="text-zinc-400"> — {f.reason}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+  const positionMap = useMemo(() => {
+    const m = new Map<string, AccountContext["positions"][number]>();
+    for (const p of account?.positions ?? []) m.set(p.symbol.toUpperCase(), p);
+    return m;
+  }, [account]);
 
-          {run.orders.length > 0 && (
-            <div>
-              <div className="text-[10px] tracking-wider text-emerald-400 uppercase mb-1">
-                Orders placed
-              </div>
-              <div className="space-y-1 text-xs">
-                {run.orders.map((o, i) => (
-                  <div
-                    key={i}
-                    className="rounded bg-emerald-950/20 border border-emerald-900/40 px-3 py-2 font-mono"
-                  >
-                    <span className="font-bold">{o.side.toUpperCase()}</span>{" "}
-                    <span>{o.symbol}</span>{" "}
-                    <span className="text-zinc-400">qty={o.qty}</span>{" "}
-                    <span className="text-zinc-400">status={o.orderStatus}</span>
-                    {o.filledAvgPrice && (
-                      <span className="text-zinc-400"> @${o.filledAvgPrice}</span>
-                    )}
-                    <span className="text-zinc-600 ml-2">id={o.alpacaOrderId.slice(0, 8)}…</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+  return (
+    <div className="mt-3 space-y-3 text-sm">
+      {source.errorText && (
+        <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-red-200">
+          <div className="text-[10px] uppercase tracking-wider text-red-400 mb-1">Error</div>
+          {source.errorText}
+        </div>
+      )}
+
+      {source.oneShotInstruction && (
+        <div>
+          <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
+            Your instruction
+          </div>
+          <div className="rounded bg-black/60 px-3 py-2 text-zinc-300 whitespace-pre-wrap">
+            {source.oneShotInstruction}
+          </div>
+        </div>
+      )}
+
+      {/* Macro regime — once per routine, above the decision cards */}
+      {detail ? (
+        snapshot?.regime ? (
+          <RegimeCard regime={snapshot.regime} />
+        ) : (
+          <div className="rounded border border-zinc-800 bg-black/30 px-3 py-2 text-[11px] text-zinc-500">
+            Macro regime not captured for this run.
+          </div>
+        )
+      ) : loading ? (
+        <DetailSkeleton lines={2} />
+      ) : null}
+
+      {source.claudeReasoning && (
+        <div>
+          <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
+            Claude's reasoning
+            {source.claudeModel && <span className="text-zinc-600"> · {source.claudeModel}</span>}
+          </div>
+          <blockquote className="rounded border-l-2 border-amber-700/60 bg-black/60 pl-3 pr-3 py-2 italic text-zinc-300 whitespace-pre-wrap leading-relaxed">
+            {source.claudeReasoning}
+          </blockquote>
+          <div className="mt-2 text-[10px] text-zinc-600 tabular-digits">
+            tokens: input={source.tokens.input ?? 0}  output={source.tokens.output ?? 0}  cache_read=
+            {source.tokens.cacheRead ?? 0}  cache_write={source.tokens.cacheWrite ?? 0}
+          </div>
+        </div>
+      )}
+
+      {source.decisions && source.decisions.length > 0 && (
+        <div>
+          <div className="text-[10px] tracking-wider text-zinc-500 uppercase mb-1">
+            Decisions ({source.decisions.length})
+          </div>
+          <div className="space-y-2">
+            {source.decisions.map((d, i) => (
+              <DecisionCard
+                key={i}
+                d={d}
+                outcome={outcomeFor(source, i)}
+                symbol={symbolMap.get(d.symbol.toUpperCase()) ?? null}
+                position={positionMap.get(d.symbol.toUpperCase()) ?? null}
+                planEntry={planMap.get(d.symbol.toUpperCase()) ?? null}
+                account={account}
+                detailLoaded={detail != null}
+                loading={loading}
+                order={source.orders.find((o) => o.decisionIndex === i) ?? null}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Validation failures whose decisionIndex didn't match any decision (rare)
+         still surface so they aren't silently dropped. */}
+      {source.validationFailures.some(
+        (f) => !source.decisions || f.decisionIndex < 0 || f.decisionIndex >= source.decisions.length,
+      ) && (
+        <div>
+          <div className="text-[10px] tracking-wider text-red-400 uppercase mb-1">
+            Other validation failures
+          </div>
+          <div className="space-y-1 text-xs">
+            {source.validationFailures
+              .filter(
+                (f) =>
+                  !source.decisions ||
+                  f.decisionIndex < 0 ||
+                  f.decisionIndex >= source.decisions.length,
+              )
+              .map((f, i) => (
+                <div key={i} className="rounded bg-red-950/30 border border-red-900/40 px-3 py-2">
+                  <span className="font-mono font-bold text-red-300">{f.symbol}</span>
+                  <span className="text-zinc-400"> — {f.reason}</span>
+                </div>
+              ))}
+          </div>
         </div>
       )}
     </div>
   );
+}
+
+function DecisionCard({
+  d,
+  outcome,
+  symbol,
+  position,
+  planEntry,
+  account,
+  detailLoaded,
+  loading,
+  order,
+}: {
+  d: RoutineDecision;
+  outcome: DecisionOutcome;
+  symbol: SnapshotSymbol | null;
+  position: AccountContext["positions"][number] | null;
+  planEntry: PlanUniverseEntry | null;
+  account: AccountContext | null;
+  detailLoaded: boolean;
+  loading: boolean;
+  order: RoutineRunSummary["orders"][number] | null;
+}) {
+  const [showDetails, setShowDetails] = useState(false);
+  const orderTypeLabel =
+    d.order_type === "limit" && d.limit_price != null ? `LMT $${d.limit_price.toFixed(2)}` : "MKT";
+
+  return (
+    <div className={cn("rounded border px-3 py-2.5 text-sm", ACTION_BG_CLASS[d.action])}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-baseline gap-2 font-mono min-w-0">
+          <span className={cn("font-bold uppercase shrink-0", ACTION_TEXT_CLASS[d.action])}>
+            {ACTION_ICON[d.action]} {d.action}
+          </span>
+          <span className="font-bold text-zinc-100 truncate">{d.symbol}</span>
+        </div>
+        {outcome && (
+          <span
+            className={cn(
+              "text-[10px] font-bold uppercase tracking-wider rounded px-2 py-0.5 border whitespace-nowrap shrink-0",
+              outcome.className,
+            )}
+          >
+            {outcome.label}
+          </span>
+        )}
+      </div>
+
+      {d.action !== "plan" && d.action !== "hold" && (
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-2 font-mono text-[12px] text-zinc-400">
+          <span className="tabular-digits text-zinc-300">qty {d.qty}</span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-zinc-300">{orderTypeLabel}</span>
+          <span className="text-zinc-600">·</span>
+          <span className="uppercase">{d.time_in_force}</span>
+        </div>
+      )}
+
+      <div className="mt-1.5 text-zinc-300 text-[13px] leading-snug">{d.rationale}</div>
+
+      {outcome?.kind === "rejected" && outcome.reason && (
+        <div className="mt-1.5 rounded bg-red-950/40 border border-red-900/60 px-2 py-1 text-[11px] text-red-300">
+          ✗ {outcome.reason}
+        </div>
+      )}
+
+      <button
+        onClick={() => setShowDetails((v) => !v)}
+        className="mt-2 text-[11px] text-zinc-500 hover:text-zinc-300 uppercase tracking-wider"
+      >
+        {showDetails ? "▾" : "▸"} Details
+      </button>
+      {showDetails && (
+        <div className="mt-2 space-y-3 border-t border-zinc-800/60 pt-2">
+          <DecisionDetails
+            d={d}
+            outcome={outcome}
+            symbol={symbol}
+            position={position}
+            planEntry={planEntry}
+            account={account}
+            detailLoaded={detailLoaded}
+            loading={loading}
+            order={order}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DecisionDetails({
+  d,
+  outcome,
+  symbol,
+  position,
+  planEntry,
+  account,
+  detailLoaded,
+  loading,
+  order,
+}: {
+  d: RoutineDecision;
+  outcome: DecisionOutcome;
+  symbol: SnapshotSymbol | null;
+  position: AccountContext["positions"][number] | null;
+  planEntry: PlanUniverseEntry | null;
+  account: AccountContext | null;
+  detailLoaded: boolean;
+  loading: boolean;
+  order: RoutineRunSummary["orders"][number] | null;
+}) {
+  if (!detailLoaded) {
+    return loading ? (
+      <DetailSkeleton lines={4} />
+    ) : (
+      <div className="text-[11px] text-zinc-500">Detail unavailable.</div>
+    );
+  }
+
+  const tech = symbol?.technicals ?? null;
+  const bid = symbol?.lastQuote?.bid ?? null;
+  const ask = symbol?.lastQuote?.ask ?? null;
+  const bars = symbol?.dailyBars ?? [];
+  const todayBar = bars[bars.length - 1] ?? null;
+  const earnings = symbol?.earnings ?? null;
+  const sentiment = symbol?.sentiment ?? null;
+  const headlines = symbol?.news ?? [];
+  const headlineLabelLookup = new Map<string, { label: SentimentLabel; score: number; rationale: string }>();
+  if (sentiment?.topHeadlines) {
+    for (const h of sentiment.topHeadlines) {
+      headlineLabelLookup.set(h.headline, { label: h.label, score: h.score, rationale: h.rationale });
+    }
+  }
+
+  const epsSurprisePct =
+    earnings?.epsActual != null && earnings.epsEstimate != null && earnings.epsEstimate !== 0
+      ? ((earnings.epsActual - earnings.epsEstimate) / Math.abs(earnings.epsEstimate)) * 100
+      : null;
+  const revSurprisePct =
+    earnings?.revActual != null && earnings.revEstimate != null && earnings.revEstimate !== 0
+      ? ((earnings.revActual - earnings.revEstimate) / Math.abs(earnings.revEstimate)) * 100
+      : null;
+  const epsBeat = epsSurprisePct != null && epsSurprisePct >= 0;
+  const revBeat = revSurprisePct != null && revSurprisePct >= 0;
+
+  return (
+    <>
+      {/* From your playbook — universe entry from the active operational plan */}
+      {planEntry && planEntry.rationale && (
+        <Section label="From your playbook">
+          <DetailRow
+            label="Rationale"
+            value={<span className="text-zinc-300 italic">"{planEntry.rationale}"</span>}
+          />
+        </Section>
+      )}
+
+      {/* Market context Claude saw */}
+      {symbol ? (
+        <Section label="Market context Claude saw">
+          {bid != null && ask != null && (
+            <DetailRow label="Quote" value={`bid ${bid.toFixed(2)} / ask ${ask.toFixed(2)}`} />
+          )}
+          {todayBar && (
+            <DetailRow
+              label="Day OHLC"
+              value={`O ${todayBar.open.toFixed(2)} · H ${todayBar.high.toFixed(2)} · L ${todayBar.low.toFixed(2)}`}
+            />
+          )}
+          {todayBar && tech?.avgVolume30d != null && (
+            <DetailRow
+              label="Volume"
+              value={`${formatVolume(todayBar.volume)} / ${formatVolume(tech.avgVolume30d)} avg`}
+            />
+          )}
+          {tech?.rsi14 != null && <DetailRow label="RSI 14" value={rsiBadge(tech.rsi14)} />}
+          {(tech?.sma20 != null || tech?.sma50 != null || tech?.sma200 != null) && (
+            <DetailRow
+              label="SMA stack"
+              value={
+                <span className="font-mono">
+                  {tech?.sma20 != null ? `20: $${tech.sma20.toFixed(2)}` : "20: —"} ·{" "}
+                  {tech?.sma50 != null ? `50: $${tech.sma50.toFixed(2)}` : "50: —"} ·{" "}
+                  {tech?.sma200 != null ? `200: $${tech.sma200.toFixed(2)}` : "200: —"}
+                </span>
+              }
+            />
+          )}
+          {tech?.pricePosVsSma50Pct != null && (
+            <DetailRow label="vs 50d SMA" value={signedPct(tech.pricePosVsSma50Pct)} />
+          )}
+          {tech?.fiftyTwoWeekHigh != null && (
+            <DetailRow
+              label="52w high"
+              value={
+                <span>
+                  ${tech.fiftyTwoWeekHigh.toFixed(2)}{" "}
+                  {tech.pctFromFiftyTwoWeekHigh != null && (
+                    <span className="text-zinc-500">({signedPct(tech.pctFromFiftyTwoWeekHigh)})</span>
+                  )}
+                </span>
+              }
+            />
+          )}
+          {tech?.fiftyTwoWeekLow != null && (
+            <DetailRow
+              label="52w low"
+              value={
+                <span>
+                  ${tech.fiftyTwoWeekLow.toFixed(2)}{" "}
+                  {tech.pctFromFiftyTwoWeekLow != null && (
+                    <span className="text-zinc-500">(+{tech.pctFromFiftyTwoWeekLow.toFixed(1)}%)</span>
+                  )}
+                </span>
+              }
+            />
+          )}
+          {tech?.atr14PctOfPrice != null && (
+            <DetailRow label="ATR %" value={`${tech.atr14PctOfPrice.toFixed(2)}%`} />
+          )}
+          {tech?.relativeVolume30d != null && (
+            <DetailRow label="Rel vol 30d" value={`${tech.relativeVolume30d.toFixed(2)}×`} />
+          )}
+        </Section>
+      ) : (
+        <Section label="Market context Claude saw">
+          <div className="text-zinc-500 text-[11px]">No snapshot captured for {d.symbol}.</div>
+        </Section>
+      )}
+
+      {/* Last 5 sessions */}
+      {bars.length > 0 && (
+        <Section label="Last 5 sessions">
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full font-mono text-[11px] tabular-digits">
+              <thead>
+                <tr className="text-zinc-500 text-[9px] uppercase tracking-wider">
+                  <th className="text-left font-medium px-1 py-0.5">Date</th>
+                  <th className="text-right font-medium px-1 py-0.5">O</th>
+                  <th className="text-right font-medium px-1 py-0.5">H</th>
+                  <th className="text-right font-medium px-1 py-0.5">L</th>
+                  <th className="text-right font-medium px-1 py-0.5">C</th>
+                  <th className="text-right font-medium px-1 py-0.5">Vol</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...bars]
+                  .slice(-5)
+                  .reverse()
+                  .map((b, i) => {
+                    const up = b.close >= b.open;
+                    return (
+                      <tr key={i} className="border-t border-zinc-900/60">
+                        <td className="px-1 py-0.5 text-zinc-500">{shortDate(b.date)}</td>
+                        <td className="px-1 py-0.5 text-right text-zinc-400">{b.open.toFixed(2)}</td>
+                        <td className="px-1 py-0.5 text-right text-zinc-400">{b.high.toFixed(2)}</td>
+                        <td className="px-1 py-0.5 text-right text-zinc-400">{b.low.toFixed(2)}</td>
+                        <td
+                          className={cn(
+                            "px-1 py-0.5 text-right font-bold",
+                            up ? "text-emerald-300" : "text-red-300",
+                          )}
+                        >
+                          {b.close.toFixed(2)}
+                        </td>
+                        <td className="px-1 py-0.5 text-right text-zinc-500">
+                          {formatVolume(b.volume)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+
+      {/* Earnings card */}
+      {earnings && (earnings.epsActual != null || earnings.revActual != null || earnings.date) && (
+        <Section label={`Earnings · ${earnings.date}${earnings.hour ? ` (${earnings.hour})` : ""}`}>
+          {earnings.epsActual != null && earnings.epsEstimate != null && (
+            <DetailRow
+              label="EPS"
+              value={
+                <span className="font-mono">
+                  <span className={cn(epsBeat ? "text-emerald-400" : "text-red-400")}>
+                    ${earnings.epsActual.toFixed(2)}
+                  </span>{" "}
+                  <span className="text-zinc-500">vs ${earnings.epsEstimate.toFixed(2)} est</span>
+                  {epsSurprisePct != null && (
+                    <>
+                      {" "}
+                      <span
+                        className={cn(
+                          "font-mono text-[10px]",
+                          epsBeat ? "text-emerald-400" : "text-red-400",
+                        )}
+                      >
+                        ({epsBeat ? "+" : ""}
+                        {epsSurprisePct.toFixed(1)}%)
+                      </span>
+                    </>
+                  )}
+                </span>
+              }
+            />
+          )}
+          {earnings.revActual != null && earnings.revEstimate != null && (
+            <DetailRow
+              label="Revenue"
+              value={
+                <span className="font-mono">
+                  <span className={cn(revBeat ? "text-emerald-400" : "text-red-400")}>
+                    {formatRevenue(earnings.revActual)}
+                  </span>{" "}
+                  <span className="text-zinc-500">vs {formatRevenue(earnings.revEstimate)} est</span>
+                  {revSurprisePct != null && (
+                    <>
+                      {" "}
+                      <span
+                        className={cn(
+                          "font-mono text-[10px]",
+                          revBeat ? "text-emerald-400" : "text-red-400",
+                        )}
+                      >
+                        ({revBeat ? "+" : ""}
+                        {revSurprisePct.toFixed(1)}%)
+                      </span>
+                    </>
+                  )}
+                </span>
+              }
+            />
+          )}
+          {(earnings.quarter != null || earnings.hour) && (
+            <DetailRow
+              label="Quarter"
+              value={`${earnings.quarter != null ? `Q${earnings.quarter}` : "—"}${earnings.hour ? ` · ${earnings.hour}` : ""}`}
+            />
+          )}
+        </Section>
+      )}
+
+      {/* News & sentiment */}
+      {(headlines.length > 0 || sentiment) && (
+        <Section
+          label={`News & sentiment${sentiment ? ` (${headlines.length} headlines, ${sentiment.scoredCount} scored)` : ""}`}
+        >
+          {sentiment && (
+            <DetailRow
+              label="Mood"
+              value={
+                <span className="flex items-baseline gap-1.5 flex-wrap">
+                  <span
+                    className={cn(
+                      "font-bold uppercase",
+                      sentimentMood(sentiment) === "bullish" && "text-emerald-400",
+                      sentimentMood(sentiment) === "bearish" && "text-red-400",
+                      sentimentMood(sentiment) === "neutral" && "text-zinc-400",
+                      sentimentMood(sentiment) === "mixed" && "text-amber-400",
+                    )}
+                  >
+                    {sentimentMood(sentiment)}
+                  </span>
+                  {sentiment.averageScore != null && (
+                    <span className="font-mono text-zinc-300">
+                      · score{" "}
+                      <span className={cn(sentiment.averageScore > 0 ? "text-emerald-400" : "text-red-400")}>
+                        {sentiment.averageScore > 0 ? "+" : ""}
+                        {sentiment.averageScore.toFixed(2)}
+                      </span>
+                    </span>
+                  )}
+                  <span className="text-zinc-600 text-[10px]">
+                    {sentiment.bullishCount} bull · {sentiment.neutralCount} neutral ·{" "}
+                    {sentiment.bearishCount} bear
+                  </span>
+                </span>
+              }
+            />
+          )}
+          {headlines.length > 0 && (
+            <div className="mt-1 space-y-1">
+              {headlines.slice(0, 5).map((h, i) => {
+                const lab = headlineLabelLookup.get(h.headline);
+                return (
+                  <HeadlineRow
+                    key={i}
+                    headline={h.headline}
+                    source={h.source}
+                    label={lab?.label}
+                    score={lab?.score}
+                    rationale={lab?.rationale}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* Position context at decision time */}
+      <Section label="Your position at decision time">
+        {account == null ? (
+          <div className="text-zinc-500 text-[11px]">
+            Position context not captured for this run.
+          </div>
+        ) : (
+          <>
+            {position ? (
+              <>
+                <DetailRow
+                  label="Holding"
+                  value={
+                    <span className="font-mono">
+                      {position.qty} sh · avg ${position.avgEntry.toFixed(2)}
+                    </span>
+                  }
+                />
+                <DetailRow
+                  label="Unrealized"
+                  value={
+                    <span
+                      className={cn(
+                        "font-mono",
+                        position.unrealizedPl > 0 ? "text-emerald-400" : "text-red-400",
+                      )}
+                    >
+                      {position.unrealizedPl > 0 ? "+" : ""}${position.unrealizedPl.toFixed(2)} (
+                      {signedPct(position.unrealizedPlPct)})
+                    </span>
+                  }
+                />
+                {account.equity > 0 && (
+                  <DetailRow
+                    label="Book weight"
+                    value={
+                      <span className="font-mono">
+                        {((position.qty * position.current) / account.equity * 100).toFixed(1)}%
+                      </span>
+                    }
+                  />
+                )}
+              </>
+            ) : (
+              <div className="text-zinc-500 text-[11px]">Not currently held — fresh entry</div>
+            )}
+            <DetailRow label="Cash" value={`$${account.cash.toLocaleString()}`} />
+            <DetailRow label="Buying power" value={`$${account.buyingPower.toLocaleString()}`} />
+          </>
+        )}
+      </Section>
+
+      {/* Outcome */}
+      <Section label="Outcome">
+        {outcome?.kind === "filled" && order ? (
+          <>
+            <DetailRow
+              label="Order status"
+              value={
+                <span className="font-mono">
+                  {order.orderStatus.toLowerCase()} · qty {order.qty}
+                </span>
+              }
+            />
+            {order.filledAvgPrice && <DetailRow label="Avg fill" value={`$${order.filledAvgPrice}`} />}
+            <DetailRow
+              label="Order id"
+              value={<span className="font-mono text-zinc-400">{order.alpacaOrderId.slice(0, 8)}…</span>}
+            />
+          </>
+        ) : outcome?.kind === "rejected" ? (
+          <DetailRow
+            label="Validation"
+            value={<span className="text-red-300">{outcome.reason}</span>}
+          />
+        ) : outcome?.kind === "noop" ? (
+          <div className="text-zinc-500 text-[11px]">No order placed (plan/hold).</div>
+        ) : (
+          <div className="text-zinc-500 text-[11px]">No order placed.</div>
+        )}
+        {d.intent_id && (
+          <DetailRow
+            label="From intent"
+            value={
+              <span className="font-mono text-amber-300">{String(d.intent_id).slice(0, 8)}…</span>
+            }
+          />
+        )}
+      </Section>
+    </>
+  );
+}
+
+function RegimeCard({ regime }: { regime: SnapshotRegimeCard }) {
+  const vixTone =
+    regime.vixLevel == null
+      ? "text-zinc-500"
+      : regime.vixLevel < 18
+        ? "text-emerald-400"
+        : regime.vixLevel > 25
+          ? "text-red-400"
+          : "text-amber-400";
+  const vixTag =
+    regime.vixLevel == null
+      ? null
+      : regime.vixLevel < 18
+        ? "low vol"
+        : regime.vixLevel > 25
+          ? "high vol"
+          : "elevated";
+  const yieldTone =
+    regime.yieldSpread10y2y == null
+      ? "text-zinc-500"
+      : regime.yieldSpread10y2y < 0
+        ? "text-red-400"
+        : "text-emerald-400";
+  const yieldTag =
+    regime.yieldSpread10y2y == null ? null : regime.yieldSpread10y2y < 0 ? "inverted" : "normal";
+
+  // Top/bottom sectors by 20d return.
+  const ranked = [...regime.sectorMomentum]
+    .filter((s) => s.return20dPct != null)
+    .sort((a, b) => (b.return20dPct ?? 0) - (a.return20dPct ?? 0));
+  const top = ranked.slice(0, 3);
+  const bot = ranked.slice(-3).reverse();
+
+  return (
+    <div className="rounded border border-amber-900/40 bg-amber-950/10 px-3 py-2.5">
+      <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400 mb-1.5">
+        Macro regime · what Claude saw
+      </div>
+      <div className="space-y-0.5 font-mono text-[11px]">
+        <DetailRow
+          label="VIX"
+          value={
+            regime.vixLevel != null ? (
+              <span className="font-mono">
+                <span className={vixTone}>{regime.vixLevel.toFixed(1)}</span>
+                {vixTag && <span className="text-zinc-500 text-[10px]"> ({vixTag})</span>}
+              </span>
+            ) : (
+              <span className="text-zinc-600">—</span>
+            )
+          }
+        />
+        <DetailRow
+          label="Yield 10y-2y"
+          value={
+            regime.yieldSpread10y2y != null ? (
+              <span className="font-mono">
+                <span className={yieldTone}>
+                  {regime.yieldSpread10y2y > 0 ? "+" : ""}
+                  {regime.yieldSpread10y2y.toFixed(2)}%
+                </span>
+                {yieldTag && <span className="text-zinc-500 text-[10px]"> ({yieldTag})</span>}
+              </span>
+            ) : (
+              <span className="text-zinc-600">—</span>
+            )
+          }
+        />
+        <DetailRow
+          label="DXY"
+          value={
+            regime.dxy != null ? regime.dxy.toFixed(2) : <span className="text-zinc-600">—</span>
+          }
+        />
+        {top.length > 0 && (
+          <DetailRow
+            label="Top sectors"
+            value={
+              <span className="text-emerald-400">
+                {top.map((s) => s.label).join(" · ")}
+              </span>
+            }
+          />
+        )}
+        {bot.length > 0 && (
+          <DetailRow
+            label="Bot sectors"
+            value={<span className="text-red-400">{bot.map((s) => s.label).join(" · ")}</span>}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5">{label}</div>
+      <div className="space-y-0.5 font-mono text-[11px]">{children}</div>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="text-[10px] uppercase tracking-wider text-zinc-500 w-24 shrink-0">
+        {label}
+      </span>
+      <span className="text-zinc-300 break-words flex-1">{value}</span>
+    </div>
+  );
+}
+
+function HeadlineRow({
+  headline,
+  source,
+  label,
+  rationale,
+  score,
+}: {
+  headline: string;
+  source: string;
+  label?: SentimentLabel;
+  rationale?: string;
+  score?: number;
+}) {
+  return (
+    <div className="flex items-start gap-2 text-[11px]">
+      <span className="text-zinc-600 mt-0.5">•</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-1.5 flex-wrap">
+          {label && (
+            <span
+              className={cn(
+                "text-[9px] font-bold uppercase tracking-wider rounded px-1 py-px border whitespace-nowrap",
+                label === "bullish" && "text-emerald-300 border-emerald-900/60 bg-emerald-950/40",
+                label === "bearish" && "text-red-300 border-red-900/60 bg-red-950/40",
+                label === "neutral" && "text-zinc-400 border-zinc-700 bg-zinc-900/40",
+                label === "mixed" && "text-amber-300 border-amber-900/60 bg-amber-950/40",
+              )}
+            >
+              {label}
+              {score != null && (
+                <span className="ml-1 font-mono">
+                  {score > 0 ? "+" : ""}
+                  {score.toFixed(1)}
+                </span>
+              )}
+            </span>
+          )}
+          <span className="text-zinc-300 leading-snug">{headline}</span>
+        </div>
+        <div className="text-[10px] text-zinc-600 mt-0.5">{source}</div>
+        {rationale && (
+          <div className="text-[10px] text-zinc-500 italic mt-0.5">↳ {rationale}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DetailSkeleton({ lines }: { lines: number }) {
+  return (
+    <div className="space-y-1.5">
+      {Array.from({ length: lines }).map((_, i) => (
+        <div key={i} className="h-3 rounded bg-zinc-900/60 animate-pulse" />
+      ))}
+    </div>
+  );
+}
+
+function rsiBadge(rsi: number) {
+  const tone = rsi >= 70 || rsi <= 30 ? "text-amber-300" : "text-zinc-300";
+  const tag = rsi >= 70 ? "overbought" : rsi <= 30 ? "oversold" : "neutral";
+  return (
+    <span className={cn("font-mono", tone)}>
+      {rsi.toFixed(0)} <span className="text-zinc-500 text-[10px]">({tag})</span>
+    </span>
+  );
+}
+
+function signedPct(pct: number) {
+  const cls = pct > 0 ? "text-emerald-400" : pct < 0 ? "text-red-400" : "text-zinc-400";
+  return (
+    <span className={cn("font-mono", cls)}>
+      {pct > 0 ? "+" : ""}
+      {pct.toFixed(1)}%
+    </span>
+  );
+}
+
+function formatVolume(v: number): string {
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
+  return v.toFixed(0);
+}
+
+function formatRevenue(v: number): string {
+  if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(1)}B`;
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  return `$${v.toLocaleString()}`;
+}
+
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(5);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function sentimentMood(s: NonNullable<SnapshotSymbol["sentiment"]>): SentimentLabel {
+  if (s.averageScore != null) {
+    if (s.averageScore > 0.2) return "bullish";
+    if (s.averageScore < -0.2) return "bearish";
+  }
+  if (s.bullishCount > s.bearishCount && s.bullishCount > s.neutralCount) return "bullish";
+  if (s.bearishCount > s.bullishCount && s.bearishCount > s.neutralCount) return "bearish";
+  if (s.bullishCount > 0 && s.bearishCount > 0) return "mixed";
+  return "neutral";
 }
 
 function StrategyStatusStrip({ data }: { data: PlaybookCurrentResponse | undefined }) {

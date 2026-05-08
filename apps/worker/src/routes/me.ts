@@ -417,11 +417,13 @@ meRoutes.get("/routine-runs/:id", async (c) => {
     .where(and(eq(routineRuns.id, id), eq(routineRuns.userId, user.id)))
     .limit(1);
   if (!row) return c.json({ error: "not_found" }, 404);
-  // The detail endpoint also returns the captured market snapshot and account
-  // context (parsed). The list endpoint stays lean — the heavy fields are only
-  // sent when a row is expanded.
+  // The detail endpoint also returns the captured market snapshot, account
+  // context, and the universe entries from the plan that was active for this
+  // run. The list endpoint stays lean — heavy fields are only sent when a row
+  // is expanded.
   let marketSnapshot: unknown = null;
   let accountContext: unknown = null;
+  let planUniverse: { symbol: string; rationale: string }[] = [];
   if (row.marketSnapshotJson) {
     try {
       marketSnapshot = JSON.parse(row.marketSnapshotJson);
@@ -436,8 +438,32 @@ meRoutes.get("/routine-runs/:id", async (c) => {
       /* malformed — leave null */
     }
   }
+  if (row.operationalPlanId) {
+    const [planRow] = await db
+      .select({ planJson: operationalPlans.planJson })
+      .from(operationalPlans)
+      .where(eq(operationalPlans.id, row.operationalPlanId))
+      .limit(1);
+    if (planRow?.planJson) {
+      try {
+        const parsed = JSON.parse(planRow.planJson) as {
+          universe?: { symbol?: unknown; rationale?: unknown }[];
+        };
+        if (Array.isArray(parsed.universe)) {
+          planUniverse = parsed.universe
+            .filter((u) => typeof u?.symbol === "string")
+            .map((u) => ({
+              symbol: String(u.symbol).toUpperCase(),
+              rationale: typeof u.rationale === "string" ? u.rationale : "",
+            }));
+        }
+      } catch {
+        /* malformed plan_json — leave empty */
+      }
+    }
+  }
   return c.json({
-    run: { ...serializeRun(row), marketSnapshot, accountContext },
+    run: { ...serializeRun(row), marketSnapshot, accountContext, planUniverse },
   });
 });
 
