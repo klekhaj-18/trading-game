@@ -10,15 +10,15 @@ import { executeRoutine } from "./execute";
 import { currentRaceState } from "../trading/race";
 import { refreshFactors } from "../data/factors";
 
-const FACTOR_WARM_CRON = "45 12 * * 1-5";
-const EQUITY_TICK_CRON = "*/5 13-20 * * 1-5";
+const FACTOR_WARM_CRON = "45 12 * * MON-FRI";
+const EQUITY_TICK_CRON = "*/5 13-20 * * MON-FRI";
 
 const SLOT_BY_CRON: Record<string, RoutineSlot> = {
-  "15 13 * * 1-5": "premarket",
-  "35 13 * * 1-5": "open",
-  "30 15 * * 1-5": "midmorning",
-  "0 18 * * 1-5": "afternoon",
-  "45 19 * * 1-5": "close",
+  "15 13 * * MON-FRI": "premarket",
+  "35 13 * * MON-FRI": "open",
+  "30 15 * * MON-FRI": "midmorning",
+  "0 18 * * MON-FRI": "afternoon",
+  "45 19 * * MON-FRI": "close",
 };
 
 export async function handleScheduled(cron: string, env: Env, ctx: ExecutionContext): Promise<void> {

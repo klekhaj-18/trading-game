@@ -428,12 +428,12 @@ function ConfirmModal({
 }
 
 const CRON_TRIGGERS: Array<{ label: string; cron: string; hint: string }> = [
-  { label: "Warm (12:45)", cron: "45 12 * * 1-5", hint: "Refresh union-universe factors only" },
-  { label: "Premarket (13:15)", cron: "15 13 * * 1-5", hint: "Run premarket routine for all approved players" },
-  { label: "Open (13:35)", cron: "35 13 * * 1-5", hint: "Run open routine for all approved players" },
-  { label: "Midmorning (15:30)", cron: "30 15 * * 1-5", hint: "Run midmorning routine for all approved players" },
-  { label: "Afternoon (18:00)", cron: "0 18 * * 1-5", hint: "Run afternoon routine for all approved players" },
-  { label: "Close (19:45)", cron: "45 19 * * 1-5", hint: "Run close routine for all approved players" },
+  { label: "Warm (12:45)", cron: "45 12 * * MON-FRI", hint: "Refresh union-universe factors only" },
+  { label: "Premarket (13:15)", cron: "15 13 * * MON-FRI", hint: "Run premarket routine for all approved players" },
+  { label: "Open (13:35)", cron: "35 13 * * MON-FRI", hint: "Run open routine for all approved players" },
+  { label: "Midmorning (15:30)", cron: "30 15 * * MON-FRI", hint: "Run midmorning routine for all approved players" },
+  { label: "Afternoon (18:00)", cron: "0 18 * * MON-FRI", hint: "Run afternoon routine for all approved players" },
+  { label: "Close (19:45)", cron: "45 19 * * MON-FRI", hint: "Run close routine for all approved players" },
 ];
 
 function ManualCronTriggerPanel() {
