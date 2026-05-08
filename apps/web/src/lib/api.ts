@@ -112,6 +112,190 @@ export interface RoutineRunSummary {
   completedAt: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Routine run detail (returned by /api/me/routine-runs/:id only)
+//
+// These mirror the worker-side `MarketSnapshot` and `AccountContext` shapes
+// (apps/worker/src/trading/snapshot.ts) and `AggregatedRegime`
+// (apps/worker/src/data/factors.ts). The worker writes them as JSON columns
+// on routine_runs and the detail endpoint parses + returns them.
+// ---------------------------------------------------------------------------
+
+export interface SnapshotQuote {
+  bid: number;
+  ask: number;
+  mid: number;
+}
+
+export interface SnapshotDailyBar {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface SnapshotNewsItem {
+  headline: string;
+  source: string;
+  createdAt: string;
+}
+
+export interface SnapshotEarningsItem {
+  symbol: string;
+  date: string;
+  hour: "bmo" | "amc" | "dmh" | "";
+  epsActual: number | null;
+  epsEstimate: number | null;
+  revActual: number | null;
+  revEstimate: number | null;
+  quarter: number | null;
+  year: number | null;
+}
+
+export interface SnapshotTechnicals {
+  symbol: string;
+  asOfDate: string | null;
+  lastClose: number | null;
+  sma20: number | null;
+  sma50: number | null;
+  sma200: number | null;
+  pricePosVsSma50Pct: number | null;
+  pricePosVsSma200Pct: number | null;
+  rsi14: number | null;
+  atr14: number | null;
+  atr14PctOfPrice: number | null;
+  realizedVol10dAnnPct: number | null;
+  realizedVol30dAnnPct: number | null;
+  fiftyTwoWeekHigh: number | null;
+  fiftyTwoWeekLow: number | null;
+  pctFromFiftyTwoWeekHigh: number | null;
+  pctFromFiftyTwoWeekLow: number | null;
+  avgVolume30d: number | null;
+  relativeVolume30d: number | null;
+  barsAvailable: number;
+}
+
+export type SentimentLabel = "bullish" | "bearish" | "neutral" | "mixed";
+
+export interface SnapshotSentimentSummary {
+  symbol: string;
+  scoredCount: number;
+  averageScore: number | null;
+  bullishCount: number;
+  bearishCount: number;
+  neutralCount: number;
+  mixedCount: number;
+  topHeadlines: {
+    headline: string;
+    score: number;
+    label: SentimentLabel;
+    rationale: string;
+  }[];
+}
+
+export interface SnapshotSymbol {
+  symbol: string;
+  lastQuote: SnapshotQuote | null;
+  dailyBars: SnapshotDailyBar[];
+  news: SnapshotNewsItem[];
+  earnings: SnapshotEarningsItem | null;
+  earningsHint: string | null;
+  sentiment: SnapshotSentimentSummary | null;
+  technicals: SnapshotTechnicals | null;
+}
+
+export interface SnapshotSectorMomentum {
+  symbol: string;
+  label: string;
+  return20dPct: number | null;
+}
+
+export interface SnapshotRegimeCard {
+  asOfSec: number;
+  vixLevel: number | null;
+  vixDate: string | null;
+  yieldSpread10y2y: number | null;
+  yieldSpreadDate: string | null;
+  dxy: number | null;
+  dxyDate: string | null;
+  spy: { lastClose: number | null; pctVsSma50: number | null; pctVsSma200: number | null };
+  qqq: { lastClose: number | null; pctVsSma50: number | null; pctVsSma200: number | null };
+  sectorLeader: SnapshotSectorMomentum | null;
+  sectorLaggard: SnapshotSectorMomentum | null;
+  sectorMomentum: SnapshotSectorMomentum[];
+  errors: string[];
+  refreshedAtSec?: number;
+}
+
+export interface MarketSnapshot {
+  asOf: string;
+  marketIsOpen: boolean;
+  nextOpen: string;
+  nextClose: string;
+  symbols: SnapshotSymbol[];
+  broaderMarket: {
+    symbol: string;
+    label: string;
+    lastQuote: SnapshotQuote | null;
+    dailyBars: SnapshotDailyBar[];
+  }[];
+  earningsSource: "finnhub" | "disabled";
+  regime: SnapshotRegimeCard | null;
+  factorSource: "warm" | "cold";
+}
+
+export interface AccountPosition {
+  symbol: string;
+  qty: number;
+  avgEntry: number;
+  current: number;
+  unrealizedPl: number;
+  unrealizedPlPct: number;
+}
+
+export interface AccountOpenOrder {
+  id: string;
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+  type: string;
+  limitPrice: number | null;
+  timeInForce: string;
+  status: string;
+  submittedAtIso: string;
+}
+
+export interface AccountRecentFill extends AccountOpenOrder {
+  filledQty: number;
+  filledAvgPrice: number | null;
+  filledAtIso: string | null;
+}
+
+export interface AccountContext {
+  accountId: string;
+  equity: number;
+  cash: number;
+  buyingPower: number;
+  longMarketValue: number;
+  dayUnrealizedPl: number;
+  positions: AccountPosition[];
+  openOrders: AccountOpenOrder[];
+  recentFills: AccountRecentFill[];
+}
+
+export interface PlanUniverseEntry {
+  symbol: string;
+  rationale: string;
+}
+
+export interface RoutineRunDetail extends RoutineRunSummary {
+  marketSnapshot: MarketSnapshot | null;
+  accountContext: AccountContext | null;
+  planUniverse: PlanUniverseEntry[];
+}
+
 /**
  * Slim cross-user row for the admin routines list. Intentionally omits the
  * decision/reasoning/order/token detail — admin is also a player, so per-row
@@ -333,7 +517,7 @@ export const api = {
     }),
 
   meRoutineRun: (id: string) =>
-    request<{ run: RoutineRunSummary }>(`/api/me/routine-runs/${encodeURIComponent(id)}`),
+    request<{ run: RoutineRunDetail }>(`/api/me/routine-runs/${encodeURIComponent(id)}`),
 
   meCancelIntent: (id: string) =>
     request<{ ok: true }>(`/api/me/intents/${id}`, { method: "DELETE" }),
