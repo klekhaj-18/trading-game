@@ -140,6 +140,9 @@ export interface SnapshotNewsItem {
   headline: string;
   source: string;
   createdAt: string;
+  score?: number;
+  label?: SentimentLabel;
+  rationale?: string;
 }
 
 export interface SnapshotEarningsItem {

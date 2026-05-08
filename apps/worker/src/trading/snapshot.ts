@@ -67,6 +67,12 @@ export interface SymbolNewsItem {
   headline: string;
   source: string;
   createdAt: string;
+  /** Per-headline sentiment score from the warm cron (Haiku-classified).
+   * Absent when this headline wasn't in the warm-scored set — typically
+   * because it appeared between warm and the routine fire. */
+  score?: number;
+  label?: "bullish" | "bearish" | "neutral" | "mixed";
+  rationale?: string;
 }
 
 export interface MarketSnapshot {
@@ -248,13 +254,24 @@ export async function buildMarketSnapshot(
   };
   const renderPlanSymbol = (sym: string) => {
     const base = renderBroader(sym);
-    const nList = (news[sym] ?? []).slice(0, 5).map((n) => ({
-      headline: n.headline,
-      source: n.source,
-      createdAt: n.createdAt,
-    }));
     const earn = earningsLookup.bySymbol[sym] ?? null;
     const agg = aggBySymbol.get(sym) ?? null;
+    // Build an ID-keyed lookup of warm-scored headlines so each live news item
+    // gets the score/label/rationale attached when warm scored it. Headlines
+    // that appeared after the warm fire stay unscored — that's the real state.
+    const aggHeadlineMap = new Map<number, NonNullable<typeof agg>["recentHeadlinesSlim"][number]>();
+    for (const h of agg?.recentHeadlinesSlim ?? []) aggHeadlineMap.set(h.id, h);
+    const nList: SymbolNewsItem[] = (news[sym] ?? []).slice(0, 5).map((n) => {
+      const sc = aggHeadlineMap.get(n.id);
+      return {
+        headline: n.headline,
+        source: n.source,
+        createdAt: n.createdAt,
+        score: sc?.score,
+        label: sc?.label,
+        rationale: sc?.rationale,
+      };
+    });
     return {
       ...base,
       news: nList,

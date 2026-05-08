@@ -303,8 +303,18 @@ export interface AggregatedSymbolFactors {
   earnings: EarningsItem | null;
   earningsHint: string | null;
   // Slim copy: full AlpacaNewsItem includes summary+url+author which can balloon
-  // KV size; the coach only needs the headline + source + timestamp.
-  recentHeadlinesSlim: { id: number; headline: string; source: string; createdAt: string }[];
+  // KV size; the coach only needs the headline + source + timestamp. Score
+  // fields populated when the warm cron has a fresh-or-cached HeadlineScore
+  // for that headline id; absent otherwise.
+  recentHeadlinesSlim: {
+    id: number;
+    headline: string;
+    source: string;
+    createdAt: string;
+    score?: number;
+    label?: HeadlineScore["label"];
+    rationale?: string;
+  }[];
   scoredSentiment: SymbolSentimentSummary | null;
   technicals: TechnicalsCard | null;
   refreshedAtSec: number;
@@ -321,19 +331,29 @@ function aggKey(sym: string): string {
   return `factors:symbol:${sym.toUpperCase()}:agg:v1`;
 }
 
-export async function writeAggregatedSymbolFactors(env: Env, factors: SymbolFactors): Promise<void> {
+export async function writeAggregatedSymbolFactors(
+  env: Env,
+  factors: SymbolFactors,
+  headlineScoresById?: Map<number, HeadlineScore>,
+): Promise<void> {
   const blob: AggregatedSymbolFactors = {
     symbol: factors.symbol,
     profile: factors.profile,
     metrics: factors.metrics,
     earnings: factors.earnings,
     earningsHint: factors.earningsHint,
-    recentHeadlinesSlim: factors.recentHeadlines.slice(0, 10).map((h) => ({
-      id: h.id,
-      headline: h.headline,
-      source: h.source,
-      createdAt: h.createdAt,
-    })),
+    recentHeadlinesSlim: factors.recentHeadlines.slice(0, 10).map((h) => {
+      const sc = headlineScoresById?.get(h.id);
+      return {
+        id: h.id,
+        headline: h.headline,
+        source: h.source,
+        createdAt: h.createdAt,
+        score: sc?.score,
+        label: sc?.label,
+        rationale: sc?.rationale,
+      };
+    }),
     scoredSentiment: factors.scoredSentiment,
     technicals: factors.technicals,
     refreshedAtSec: Math.floor(Date.now() / 1000),
@@ -535,8 +555,10 @@ export async function refreshFactors(
       if (list && list.length > 0) {
         factors.scoredSentiment = summarizeScores(sym, list);
       }
+      const scoreIndex = new Map<number, HeadlineScore>();
+      for (const s of list ?? []) scoreIndex.set(s.headlineId, s);
       try {
-        await writeAggregatedSymbolFactors(env, factors);
+        await writeAggregatedSymbolFactors(env, factors, scoreIndex);
       } catch (err) {
         failures.push({
           stage: "agg-write",
