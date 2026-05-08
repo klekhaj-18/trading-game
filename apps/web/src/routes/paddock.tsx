@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TEAM_COLOR_META, type TeamColor } from "shared/auth";
-import { api, ApiError, type AdminRoutineSummary, type RosterPlayer } from "../lib/api";
+import {
+  api,
+  ApiError,
+  type AdminRoutineSummary,
+  type ProbeStatus,
+  type RosterPlayer,
+} from "../lib/api";
 import { cn } from "../lib/utils";
 
 const RACE_DURATION_DAYS = 30;
@@ -563,6 +569,7 @@ export function PaddockPage() {
     <div className="space-y-6">
       <RaceControlPanel />
       <ManualCronTriggerPanel />
+      <DataProvidersPanel />
       <AllRoutinesPanel />
       <TestOrderPanel />
     </div>
@@ -651,6 +658,73 @@ function AllRoutinesPanel() {
             />
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function DataProvidersPanel() {
+  const probeM = useMutation({ mutationFn: api.adminFactorsProbe });
+  const result = probeM.data;
+  const err = probeM.error as ApiError | null;
+
+  return (
+    <div>
+      <div className="text-xs tracking-[0.3em] text-zinc-500 uppercase">Admin</div>
+      <div className="text-2xl font-black tracking-tight mt-1">Data providers</div>
+      <div className="mt-1 text-sm text-zinc-500">
+        Verify Finnhub, FRED, Alpaca news, and FMP secrets are wired correctly. Hits one cheap
+        endpoint per provider; safe to re-run.
+      </div>
+      <div className="mt-3 rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-4 space-y-3">
+        <button
+          onClick={() => probeM.mutate()}
+          disabled={probeM.isPending}
+          className="rounded border border-zinc-700 bg-black/40 px-3 py-2 text-xs tracking-wider uppercase hover:border-zinc-500 disabled:opacity-40"
+        >
+          {probeM.isPending ? "Probing…" : "Verify providers"}
+        </button>
+        {err && (
+          <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+            {err.message}
+          </div>
+        )}
+        {result && (
+          <div className="space-y-2">
+            <ProbeRow label="Finnhub" status={result.finnhub} />
+            <ProbeRow label="FRED" status={result.fred} />
+            <ProbeRow label="Alpaca news" status={result.alpacaNews} />
+            <ProbeRow label="FMP" status={result.fmp} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProbeRow({ label, status }: { label: string; status: ProbeStatus }) {
+  return (
+    <div className="rounded border border-zinc-800 bg-black/40 px-3 py-2 text-xs">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="font-bold text-zinc-200">{label}</span>
+        <span
+          className={cn(
+            "text-[10px] font-bold uppercase tracking-wider rounded px-2 py-0.5 border",
+            status.ok
+              ? "text-emerald-300 border-emerald-700 bg-emerald-950/40"
+              : "text-red-300 border-red-700 bg-red-950/40",
+          )}
+        >
+          {status.ok ? "✓ ok" : "✗ failed"}
+        </span>
+      </div>
+      {!status.ok && status.reason && (
+        <div className="mt-1 text-[11px] text-red-300">{status.reason}</div>
+      )}
+      {status.ok && status.sample !== undefined && (
+        <pre className="mt-1 text-[10px] text-zinc-400 whitespace-pre-wrap break-all font-mono">
+          {JSON.stringify(status.sample, null, 2)}
+        </pre>
       )}
     </div>
   );
