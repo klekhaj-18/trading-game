@@ -85,7 +85,16 @@ meRoutes.get("/positions", async (c) => {
     return c.json(payload);
   } catch (err) {
     console.error("positions error", err);
-    return c.json({ positions: [], error: "positions_fetch_failed" });
+    if (err instanceof AlpacaAuthError) {
+      return c.json({ error: "alpaca_auth_failed" }, 401);
+    }
+    return c.json(
+      {
+        error: "positions_fetch_failed",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      502,
+    );
   }
 });
 
@@ -314,7 +323,16 @@ meRoutes.get("/open-orders", async (c) => {
     return c.json(payload);
   } catch (err) {
     console.error("open-orders error", err);
-    return c.json({ orders: [], error: "open_orders_fetch_failed" });
+    if (err instanceof AlpacaAuthError) {
+      return c.json({ error: "alpaca_auth_failed" }, 401);
+    }
+    return c.json(
+      {
+        error: "open_orders_fetch_failed",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      502,
+    );
   }
 });
 

@@ -213,6 +213,38 @@ export const api = {
 
   adminRoster: () => request<RosterResponse>("/api/admin/roster"),
 
+  adminResyncUserAlpaca: (userId: string) =>
+    request<{
+      userId: string;
+      displayName: string;
+      storedAccountId: string | null;
+      cacheBusted: true;
+      account: {
+        ok: boolean;
+        accountId?: string;
+        equity?: string;
+        cash?: string;
+        longMarketValue?: string;
+        status?: string;
+        error?: string;
+      };
+      positions: {
+        ok: boolean;
+        count?: number;
+        raw?: Array<{
+          symbol: string;
+          qty: string;
+          avgEntry: string;
+          current: string;
+          marketValue: string;
+          unrealizedPl: string;
+          side: "long" | "short";
+        }>;
+        error?: string;
+      };
+      openOrders: { ok: boolean; count?: number; error?: string };
+    }>(`/api/admin/users/${encodeURIComponent(userId)}/alpaca-resync`, { method: "POST" }),
+
   resetAdminTestData: () =>
     request<{ ok: true }>("/api/admin/reset-admin-test-data", { method: "POST" }),
 

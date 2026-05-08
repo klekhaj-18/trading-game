@@ -8,7 +8,15 @@ import { getDb } from "../db/client";
 import { operationalPlans, routineRuns, trades, users } from "../db/schema";
 import { executeRoutine } from "../routines/execute";
 import { captureEquitySnapshots, handleScheduled } from "../routines/cron";
-import { placeOrder, fetchOrder, type AlpacaCreds } from "../lib/alpaca";
+import {
+  AlpacaAuthError,
+  fetchAccount,
+  fetchOpenOrders,
+  fetchOrder,
+  fetchPositions,
+  placeOrder,
+  type AlpacaCreds,
+} from "../lib/alpaca";
 import { open } from "../lib/crypto";
 import { ulid } from "../lib/ids";
 import { clearDemoUsers, seedDemoUsers } from "../lib/demo-seed";
@@ -240,6 +248,125 @@ async function loadAdminAlpacaCreds(env: Env, userId: string): Promise<AlpacaCre
   );
   return { apiKey, apiSecret };
 }
+
+adminRoutes.post("/users/:userId/alpaca-resync", async (c) => {
+  const userId = c.req.param("userId");
+  const db = getDb(c.env.DB);
+  const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!u) return c.json({ error: "user_not_found" }, 404);
+  if (
+    !u.alpacaKeyCiphertext ||
+    !u.alpacaKeyIv ||
+    !u.alpacaSecretCiphertext ||
+    !u.alpacaSecretIv
+  ) {
+    return c.json({ error: "alpaca_not_linked" }, 400);
+  }
+
+  await invalidateUserAlpacaCaches(c.env, userId);
+
+  const apiKey = await open(
+    { ciphertext: u.alpacaKeyCiphertext, iv: u.alpacaKeyIv },
+    c.env.ALPACA_KEY_ENCRYPTION_KEY,
+  );
+  const apiSecret = await open(
+    { ciphertext: u.alpacaSecretCiphertext, iv: u.alpacaSecretIv },
+    c.env.ALPACA_KEY_ENCRYPTION_KEY,
+  );
+  const creds: AlpacaCreds = { apiKey, apiSecret };
+
+  const result: {
+    userId: string;
+    displayName: string;
+    storedAccountId: string | null;
+    cacheBusted: true;
+    account: {
+      ok: boolean;
+      accountId?: string;
+      equity?: string;
+      cash?: string;
+      longMarketValue?: string;
+      status?: string;
+      error?: string;
+    };
+    positions: { ok: boolean; count?: number; raw?: unknown; error?: string };
+    openOrders: { ok: boolean; count?: number; error?: string };
+  } = {
+    userId,
+    displayName: u.displayName,
+    storedAccountId: u.alpacaAccountId,
+    cacheBusted: true,
+    account: { ok: false },
+    positions: { ok: false },
+    openOrders: { ok: false },
+  };
+
+  try {
+    const acct = await fetchAccount(apiKey, apiSecret);
+    result.account = {
+      ok: true,
+      accountId: acct.id,
+      equity: acct.equity,
+      cash: acct.cash,
+      longMarketValue: acct.long_market_value,
+      status: acct.status,
+    };
+  } catch (err) {
+    result.account = {
+      ok: false,
+      error:
+        err instanceof AlpacaAuthError
+          ? `auth_failed (${err.status})`
+          : err instanceof Error
+            ? err.message
+            : String(err),
+    };
+  }
+
+  try {
+    const positions = await fetchPositions(creds);
+    result.positions = {
+      ok: true,
+      count: positions.length,
+      raw: positions.map((p) => ({
+        symbol: p.symbol,
+        qty: p.qty,
+        avgEntry: p.avg_entry_price,
+        current: p.current_price,
+        marketValue: p.market_value,
+        unrealizedPl: p.unrealized_pl,
+        side: p.side,
+      })),
+    };
+  } catch (err) {
+    result.positions = {
+      ok: false,
+      error:
+        err instanceof AlpacaAuthError
+          ? `auth_failed (${err.status})`
+          : err instanceof Error
+            ? err.message
+            : String(err),
+    };
+  }
+
+  try {
+    const openOrders = await fetchOpenOrders(creds);
+    result.openOrders = { ok: true, count: openOrders.length };
+  } catch (err) {
+    result.openOrders = {
+      ok: false,
+      error:
+        err instanceof AlpacaAuthError
+          ? `auth_failed (${err.status})`
+          : err instanceof Error
+            ? err.message
+            : String(err),
+    };
+  }
+
+  return c.json(result);
+});
 
 adminRoutes.post("/factors/probe", async (c) => {
   const user = c.get("user");
