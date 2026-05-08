@@ -130,7 +130,7 @@ const SECTIONS: FaqSection[] = [
             Seven Cloudflare Cron Triggers, fixed in UTC. Race-gated (no fires pre-race /
             post-race), weekday-gated (Mon–Fri). Holidays are absorbed by Alpaca's market-closed
             signal — routines run, but validators downgrade live orders to "plan" actions. The
-            5-min equity tick (<code>*/5 13-20 * * 1-5</code>) only hits Alpaca for the snapshot;
+            5-min equity tick (<code>*/5 13-20 * * MON-FRI</code>) only hits Alpaca for the snapshot;
             no Claude, no factor refresh — invisible on the Anthropic budget.
           </>
         ),

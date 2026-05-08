@@ -13,13 +13,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const workerDir = path.resolve(here, "..");
 
 const EXPECTED_CRONS = [
-  "45 12 * * 1-5",      // factor warm (pre-premarket)
-  "15 13 * * 1-5",      // premarket routine
-  "35 13 * * 1-5",      // open routine
-  "30 15 * * 1-5",      // midmorning routine
-  "0 18 * * 1-5",       // afternoon routine
-  "45 19 * * 1-5",      // close routine
-  "*/5 13-20 * * 1-5",  // 5-min equity tick during US market hours
+  "45 12 * * MON-FRI",      // factor warm (pre-premarket)
+  "15 13 * * MON-FRI",      // premarket routine
+  "35 13 * * MON-FRI",      // open routine
+  "30 15 * * MON-FRI",      // midmorning routine
+  "0 18 * * MON-FRI",       // afternoon routine
+  "45 19 * * MON-FRI",      // close routine
+  "*/5 13-20 * * MON-FRI",  // 5-min equity tick during US market hours
 ];
 
 function fail(msg) {
