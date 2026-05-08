@@ -1446,10 +1446,13 @@ function DecisionDetails({
   const earnings = symbol?.earnings ?? null;
   const sentiment = symbol?.sentiment ?? null;
   const headlines = symbol?.news ?? [];
-  const headlineLabelLookup = new Map<string, { label: SentimentLabel; score: number; rationale: string }>();
+  // Backfill lookup for snapshots written before the per-news-item scores were
+  // attached (pre-deploy of this fix). Newer snapshots already carry score/
+  // label/rationale on each news item directly, so the lookup just shadows.
+  const legacyLabelLookup = new Map<string, { label: SentimentLabel; score: number; rationale: string }>();
   if (sentiment?.topHeadlines) {
     for (const h of sentiment.topHeadlines) {
-      headlineLabelLookup.set(h.headline, { label: h.label, score: h.score, rationale: h.rationale });
+      legacyLabelLookup.set(h.headline, { label: h.label, score: h.score, rationale: h.rationale });
     }
   }
 
@@ -1703,15 +1706,18 @@ function DecisionDetails({
           {headlines.length > 0 && (
             <div className="mt-1 space-y-1">
               {headlines.slice(0, 5).map((h, i) => {
-                const lab = headlineLabelLookup.get(h.headline);
+                const fallback = legacyLabelLookup.get(h.headline);
+                const label = h.label ?? fallback?.label;
+                const score = h.score ?? fallback?.score;
+                const rationale = h.rationale ?? fallback?.rationale;
                 return (
                   <HeadlineRow
                     key={i}
                     headline={h.headline}
                     source={h.source}
-                    label={lab?.label}
-                    score={lab?.score}
-                    rationale={lab?.rationale}
+                    label={label}
+                    score={score}
+                    rationale={rationale}
                   />
                 );
               })}
