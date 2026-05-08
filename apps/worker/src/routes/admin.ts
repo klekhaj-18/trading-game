@@ -136,6 +136,30 @@ adminRoutes.post(
   },
 );
 
+// Sync variant: collects every waitUntil() call from handleScheduled and awaits
+// them before responding. Premarket/open take 65-90s (Claude + Alpaca), which
+// exceeds HTTP-context waitUntil's effective lifetime, so the async variant
+// orphans those runs. Awaiting inline keeps the HTTP request open for the
+// whole duration; Pro plan tolerates ~100s response time, which fits.
+adminRoutes.post(
+  "/trigger-cron-sync",
+  zValidator("json", z.object({ cron: z.string() })),
+  async (c) => {
+    const { cron } = c.req.valid("json");
+    const tasks: Promise<unknown>[] = [];
+    const captureCtx = {
+      waitUntil: (p: Promise<unknown>) => {
+        tasks.push(p);
+      },
+      passThroughOnException: () => {},
+    } as unknown as ExecutionContext;
+    const startedAt = Date.now();
+    await handleScheduled(cron, c.env, captureCtx);
+    await Promise.allSettled(tasks);
+    return c.json({ ok: true, cron, durationMs: Date.now() - startedAt });
+  },
+);
+
 adminRoutes.post("/test-order", zValidator("json", testOrderSchema), async (c) => {
   const user = c.get("user");
   const input = c.req.valid("json");

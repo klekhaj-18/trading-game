@@ -472,21 +472,38 @@ function ConfirmModal({
   );
 }
 
-const CRON_TRIGGERS: Array<{ label: string; cron: string; hint: string }> = [
-  { label: "Warm (12:45)", cron: "45 12 * * MON-FRI", hint: "Refresh union-universe factors only" },
-  { label: "Premarket (13:15)", cron: "15 13 * * MON-FRI", hint: "Run premarket routine for all approved players" },
-  { label: "Open (13:35)", cron: "35 13 * * MON-FRI", hint: "Run open routine for all approved players" },
-  { label: "Midmorning (15:30)", cron: "30 15 * * MON-FRI", hint: "Run midmorning routine for all approved players" },
-  { label: "Afternoon (18:00)", cron: "0 18 * * MON-FRI", hint: "Run afternoon routine for all approved players" },
-  { label: "Close (19:45)", cron: "45 19 * * MON-FRI", hint: "Run close routine for all approved players" },
+type CronTrigger = {
+  label: string;
+  cron: string;
+  hint: string;
+  /** "async" returns instantly (waitUntil); only safe for slots that finish in seconds. "sync" awaits the work and keeps the request open until completion (needed for routines that take 60-90s). */
+  mode: "async" | "sync";
+};
+
+const CRON_TRIGGERS: CronTrigger[] = [
+  { label: "Warm (12:45)", cron: "45 12 * * MON-FRI", hint: "Refresh union-universe factors only — fast, runs in background", mode: "async" },
+  { label: "Premarket (13:15)", cron: "15 13 * * MON-FRI", hint: "Run premarket routine for all approved players — awaits completion (~60-90s)", mode: "sync" },
+  { label: "Open (13:35)", cron: "35 13 * * MON-FRI", hint: "Run open routine for all approved players — awaits completion", mode: "sync" },
+  { label: "Midmorning (15:30)", cron: "30 15 * * MON-FRI", hint: "Run midmorning routine for all approved players — awaits completion", mode: "sync" },
+  { label: "Afternoon (18:00)", cron: "0 18 * * MON-FRI", hint: "Run afternoon routine for all approved players — awaits completion", mode: "sync" },
+  { label: "Close (19:45)", cron: "45 19 * * MON-FRI", hint: "Run close routine for all approved players — awaits completion", mode: "sync" },
 ];
 
 function ManualCronTriggerPanel() {
-  const [lastFired, setLastFired] = useState<{ label: string; cron: string; at: number } | null>(null);
+  const [lastFired, setLastFired] = useState<
+    { label: string; cron: string; at: number; mode: "async" | "sync"; durationMs?: number } | null
+  >(null);
   const m = useMutation({
-    mutationFn: ({ cron }: { label: string; cron: string }) => api.adminTriggerCron(cron),
-    onSuccess: (_res, vars) =>
-      setLastFired({ label: vars.label, cron: vars.cron, at: Date.now() }),
+    mutationFn: (t: CronTrigger) =>
+      t.mode === "sync" ? api.adminTriggerCronSync(t.cron) : api.adminTriggerCron(t.cron),
+    onSuccess: (res, vars) =>
+      setLastFired({
+        label: vars.label,
+        cron: vars.cron,
+        at: Date.now(),
+        mode: vars.mode,
+        durationMs: "durationMs" in res ? res.durationMs : undefined,
+      }),
   });
   const err = m.error as ApiError | null;
   return (
@@ -495,8 +512,8 @@ function ManualCronTriggerPanel() {
       <div className="text-2xl font-black tracking-tight mt-1">Manual cron trigger</div>
       <div className="mt-1 text-sm text-zinc-500">
         Fire a slot for <strong>every approved + Alpaca-linked player</strong>, exactly as the scheduler
-        would. Use after a missed cron (e.g. trigger drift, deploy gap). Race must be <em>in_race</em>;
-        otherwise the worker skips.
+        would. Routine slots wait for the work to finish before responding (≈60–90s); warm returns
+        instantly. Race must be <em>in_race</em>; otherwise the worker skips.
       </div>
       <div className="mt-3 rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-4 space-y-3">
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -504,14 +521,18 @@ function ManualCronTriggerPanel() {
             <button
               key={t.cron}
               title={t.hint}
-              onClick={() => m.mutate({ label: t.label, cron: t.cron })}
+              onClick={() => m.mutate(t)}
               disabled={m.isPending}
               className={cn(
                 "rounded border border-zinc-700 bg-black/40 px-3 py-2 text-xs tracking-wider uppercase",
                 "hover:border-zinc-500 disabled:opacity-40 text-left",
               )}
             >
-              {m.isPending && m.variables?.cron === t.cron ? "firing…" : t.label}
+              {m.isPending && m.variables?.cron === t.cron
+                ? t.mode === "sync"
+                  ? "running… (60–90s)"
+                  : "firing…"
+                : t.label}
             </button>
           ))}
         </div>
@@ -522,9 +543,16 @@ function ManualCronTriggerPanel() {
         )}
         {lastFired && !err && (
           <div className="rounded border border-emerald-900/60 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
-            Fired <span className="font-mono">{lastFired.label}</span>
+            {lastFired.mode === "sync" ? "Completed" : "Fired"}{" "}
+            <span className="font-mono">{lastFired.label}</span>
             <span className="text-zinc-500"> · cron </span>
             <span className="font-mono">{lastFired.cron}</span>
+            {lastFired.durationMs != null && (
+              <>
+                <span className="text-zinc-500"> · </span>
+                <span className="tabular-digits">{(lastFired.durationMs / 1000).toFixed(1)}s</span>
+              </>
+            )}
             <span className="text-zinc-500"> · {new Date(lastFired.at).toLocaleTimeString()}</span>
             <div className="mt-1 text-[10px] text-zinc-500">
               Runs land in <span className="font-mono">routine_runs</span> with kind=
