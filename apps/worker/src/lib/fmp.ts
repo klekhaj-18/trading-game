@@ -90,7 +90,8 @@ async function fetchOne(env: Env, symbol: string): Promise<FetchOneResult> {
   // /stable/earnings (the modern endpoint) returns past + upcoming earnings
   // for a single symbol with epsActual/epsEstimated/revenueActual/revenueEstimated.
   // The old /api/v3/historical/earning_calendar endpoint was deprecated 2025.
-  const url = `https://financialmodelingprep.com/stable/earnings?symbol=${encodeURIComponent(symbol)}&limit=8&apikey=${encodeURIComponent(env.FMP_API_KEY)}`;
+  // Free tier caps `limit` at 5; we only need the most recent quarter anyway.
+  const url = `https://financialmodelingprep.com/stable/earnings?symbol=${encodeURIComponent(symbol)}&limit=5&apikey=${encodeURIComponent(env.FMP_API_KEY)}`;
   let res: Response;
   try {
     res = await fetch(url);
