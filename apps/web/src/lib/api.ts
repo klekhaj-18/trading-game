@@ -205,6 +205,12 @@ export const api = {
 
   adminTestRuns: () => request<{ runs: AdminTestRun[] }>("/api/admin/test-runs"),
 
+  adminTriggerCron: (cron: string) =>
+    request<{ ok: true; cron: string }>("/api/admin/trigger-cron", {
+      method: "POST",
+      body: JSON.stringify({ cron }),
+    }),
+
   adminRoster: () => request<RosterResponse>("/api/admin/roster"),
 
   resetAdminTestData: () =>

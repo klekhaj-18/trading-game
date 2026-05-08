@@ -11,6 +11,7 @@ build/
 .vscode/
 !.vscode/extensions.json
 .idea/
+.claude/settings.local.json
 coverage/
 .turbo/
 drizzle/_journal.json.bak
