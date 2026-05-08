@@ -45,7 +45,9 @@ function pickNum(...vs: Array<number | null | undefined>): number | null {
 const PER_SYMBOL_TTL_SECONDS = 6 * 60 * 60;
 
 function cacheKey(symbol: string): string {
-  return `fmp:earnings:${symbol.toUpperCase()}:v1`;
+  // v2: bumped after picking logic changed to prefer the most recent reported
+  // quarter (epsActual non-null) over the upcoming quarter.
+  return `fmp:earnings:${symbol.toUpperCase()}:v2`;
 }
 
 export async function fetchFmpEarningsBatch(
@@ -143,27 +145,42 @@ async function fetchOne(env: Env, symbol: string): Promise<FetchOneResult> {
     return { ok: false, reason: "FMP returned empty array" };
   }
   const rows = payload as FmpEarningsRow[];
-  // Most recent first; pick the latest row that has at least one non-null field.
+  // Sort newest-first by report date.
   const sorted = rows
     .filter((r) => typeof r.date === "string")
     .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+
+  const toData = (r: FmpEarningsRow): FmpEarnings => ({
+    symbol: symbol.toUpperCase(),
+    date: r.date ?? "",
+    epsActual: pickNum(r.epsActual, r.eps),
+    epsEstimate: pickNum(r.epsEstimated),
+    revActual: pickNum(r.revenueActual, r.revenue),
+    revEstimate: pickNum(r.revenueEstimated),
+  });
+
+  // Prefer the most recent ALREADY-REPORTED quarter (epsActual or revActual
+  // non-null). FMP's calendar response includes the upcoming quarter as the
+  // top row with only estimates populated; we want the last reported quarter
+  // for a "what just happened" view.
   for (const r of sorted) {
-    const epsActual = pickNum(r.epsActual, r.eps);
-    const epsEstimate = pickNum(r.epsEstimated);
-    const revActual = pickNum(r.revenueActual, r.revenue);
-    const revEstimate = pickNum(r.revenueEstimated);
-    if (epsActual != null || epsEstimate != null || revActual != null || revEstimate != null) {
-      return {
-        ok: true,
-        data: {
-          symbol: symbol.toUpperCase(),
-          date: r.date ?? "",
-          epsActual,
-          epsEstimate,
-          revActual,
-          revEstimate,
-        },
-      };
+    const data = toData(r);
+    if (data.epsActual != null || data.revActual != null) {
+      return { ok: true, data };
+    }
+  }
+
+  // No reported quarter found (rare). Fall back to the most recent row with
+  // any populated field — at minimum we get the upcoming-quarter estimates.
+  for (const r of sorted) {
+    const data = toData(r);
+    if (
+      data.epsActual != null ||
+      data.epsEstimate != null ||
+      data.revActual != null ||
+      data.revEstimate != null
+    ) {
+      return { ok: true, data };
     }
   }
   return { ok: false, reason: `no rows with EPS/revenue (got ${rows.length} entries)` };
