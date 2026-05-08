@@ -98,7 +98,14 @@ export function PitWallPage() {
 
       <div>
         <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase mb-3">Positions</div>
-        <PositionsTable positions={positions} />
+        {posQ.isError ? (
+          <FetchErrorBanner
+            label="positions"
+            message={posQ.error instanceof Error ? posQ.error.message : "Couldn't load from Alpaca"}
+          />
+        ) : (
+          <PositionsTable positions={positions} />
+        )}
       </div>
 
       <div>
@@ -112,7 +119,14 @@ export function PitWallPage() {
           </button>
         </div>
         {showDirectOrder && <DirectOrderComposer onDone={() => setShowDirectOrder(false)} />}
-        <OpenOrdersTable orders={ordersQ.data?.orders ?? []} />
+        {ordersQ.isError ? (
+          <FetchErrorBanner
+            label="open orders"
+            message={ordersQ.error instanceof Error ? ordersQ.error.message : "Couldn't load from Alpaca"}
+          />
+        ) : (
+          <OpenOrdersTable orders={ordersQ.data?.orders ?? []} />
+        )}
       </div>
 
       <IntentsSection
@@ -619,6 +633,18 @@ function OpenOrderRow({ order }: { order: OpenOrderSummary }) {
         {errText && <div className="mt-1 text-[10px] text-red-400">{errText}</div>}
       </td>
     </tr>
+  );
+}
+
+function FetchErrorBanner({ label, message }: { label: string; message: string }) {
+  return (
+    <div className="rounded-lg border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-200">
+      <div className="font-semibold">Couldn't load {label} from Alpaca.</div>
+      <div className="text-xs text-red-300/80 mt-1 font-mono break-all">{message}</div>
+      <div className="text-[11px] text-zinc-400 mt-2">
+        Don't trust this section right now — your real Alpaca state may differ. Ask the admin to "Resync Alpaca" from the paddock, or retry shortly.
+      </div>
+    </div>
   );
 }
 

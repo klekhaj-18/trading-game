@@ -350,21 +350,66 @@ function RosterRow({ player }: { player: RosterPlayer | null }) {
   const tone = ready ? "border-emerald-900/60 bg-emerald-950/20" : "border-amber-900/60 bg-amber-950/20";
   return (
     <div
-      className={cn("flex items-center gap-3 rounded border px-3 py-2 text-xs", tone)}
+      className={cn("rounded border px-3 py-2 text-xs", tone)}
       style={{ borderLeft: `3px solid ${hex}` }}
     >
-      <span className="h-2 w-2 rounded-full" style={{ background: hex }} />
-      <span className="font-semibold text-sm">{player.displayName}</span>
-      {player.isAdmin && (
-        <span className="text-[9px] uppercase tracking-wider rounded bg-[var(--color-flag-gold)]/20 text-[var(--color-flag-gold)] px-1.5 py-0.5 font-bold">
-          Admin
-        </span>
+      <div className="flex items-center gap-3">
+        <span className="h-2 w-2 rounded-full" style={{ background: hex }} />
+        <span className="font-semibold text-sm">{player.displayName}</span>
+        {player.isAdmin && (
+          <span className="text-[9px] uppercase tracking-wider rounded bg-[var(--color-flag-gold)]/20 text-[var(--color-flag-gold)] px-1.5 py-0.5 font-bold">
+            Admin
+          </span>
+        )}
+        <div className="flex-1" />
+        {ready ? (
+          <span className="text-[10px] uppercase tracking-wider text-emerald-300">Ready</span>
+        ) : (
+          <span className="text-[10px] text-amber-300">{issues.join(", ")}</span>
+        )}
+        {player.alpacaLinked && <ResyncAlpacaButton player={player} />}
+      </div>
+    </div>
+  );
+}
+
+function ResyncAlpacaButton({ player }: { player: RosterPlayer }) {
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: () => api.adminResyncUserAlpaca(player.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "positions"] });
+      qc.invalidateQueries({ queryKey: ["me", "open-orders"] });
+    },
+  });
+  const data = m.data;
+  const err = m.error as ApiError | null;
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        onClick={() => m.mutate()}
+        disabled={m.isPending}
+        title="Bust this player's positions+open-orders KV cache and force-fetch from Alpaca. Use when their Pit Wall disagrees with Alpaca."
+        className="text-[10px] uppercase tracking-wider rounded border border-zinc-700 px-2 py-1 hover:border-zinc-500 disabled:opacity-40"
+      >
+        {m.isPending ? "syncing…" : "Resync Alpaca"}
+      </button>
+      {err && (
+        <span className="text-[10px] text-red-300 font-mono">{err.message}</span>
       )}
-      <div className="flex-1" />
-      {ready ? (
-        <span className="text-[10px] uppercase tracking-wider text-emerald-300">Ready</span>
-      ) : (
-        <span className="text-[10px] text-amber-300">{issues.join(", ")}</span>
+      {data && !err && (
+        <span className="text-[10px] font-mono">
+          {data.positions.ok ? (
+            <span className="text-emerald-300">
+              {data.positions.count ?? 0} pos · {data.openOrders.count ?? 0} ord
+              {data.account.ok && (
+                <span className="text-zinc-500"> · acct {data.account.accountId?.slice(0, 8)}</span>
+              )}
+            </span>
+          ) : (
+            <span className="text-red-300">positions: {data.positions.error}</span>
+          )}
+        </span>
       )}
     </div>
   );
