@@ -22,13 +22,24 @@ export interface FmpEarningsLookup {
   reason?: string;
 }
 
+// /stable/earnings returns the modern field names (epsActual, revenueActual);
+// older v3 endpoints used (eps, revenue). We accept both for resilience.
 interface FmpEarningsRow {
   date?: string;
   symbol?: string;
   eps?: number | null;
+  epsActual?: number | null;
   epsEstimated?: number | null;
   revenue?: number | null;
+  revenueActual?: number | null;
   revenueEstimated?: number | null;
+}
+
+function pickNum(...vs: Array<number | null | undefined>): number | null {
+  for (const v of vs) {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return null;
 }
 
 const PER_SYMBOL_TTL_SECONDS = 6 * 60 * 60;
@@ -76,7 +87,10 @@ type FetchOneResult =
 
 async function fetchOne(env: Env, symbol: string): Promise<FetchOneResult> {
   if (!env.FMP_API_KEY) return { ok: false, reason: "FMP_API_KEY not set" };
-  const url = `https://financialmodelingprep.com/api/v3/historical/earning_calendar/${encodeURIComponent(symbol)}?apikey=${encodeURIComponent(env.FMP_API_KEY)}`;
+  // /stable/earnings (the modern endpoint) returns past + upcoming earnings
+  // for a single symbol with epsActual/epsEstimated/revenueActual/revenueEstimated.
+  // The old /api/v3/historical/earning_calendar endpoint was deprecated 2025.
+  const url = `https://financialmodelingprep.com/stable/earnings?symbol=${encodeURIComponent(symbol)}&limit=8&apikey=${encodeURIComponent(env.FMP_API_KEY)}`;
   let res: Response;
   try {
     res = await fetch(url);
@@ -89,7 +103,7 @@ async function fetchOne(env: Env, symbol: string): Promise<FetchOneResult> {
   if (!res.ok) {
     let body = "";
     try {
-      body = (await res.text()).slice(0, 200);
+      body = (await res.text()).slice(0, 500);
     } catch {
       /* ignore */
     }
@@ -112,11 +126,16 @@ async function fetchOne(env: Env, symbol: string): Promise<FetchOneResult> {
   if (
     payload != null &&
     typeof payload === "object" &&
-    "Error Message" in (payload as Record<string, unknown>)
+    !Array.isArray(payload) &&
+    ("Error Message" in (payload as Record<string, unknown>) ||
+      "error" in (payload as Record<string, unknown>) ||
+      "message" in (payload as Record<string, unknown>))
   ) {
+    const obj = payload as Record<string, unknown>;
+    const msg = obj["Error Message"] ?? obj["error"] ?? obj["message"];
     return {
       ok: false,
-      reason: `FMP error: ${String((payload as Record<string, unknown>)["Error Message"])}`,
+      reason: `FMP error: ${String(msg).slice(0, 500)}`,
     };
   }
   if (!Array.isArray(payload) || payload.length === 0) {
@@ -128,21 +147,20 @@ async function fetchOne(env: Env, symbol: string): Promise<FetchOneResult> {
     .filter((r) => typeof r.date === "string")
     .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
   for (const r of sorted) {
-    if (
-      r.eps != null ||
-      r.epsEstimated != null ||
-      r.revenue != null ||
-      r.revenueEstimated != null
-    ) {
+    const epsActual = pickNum(r.epsActual, r.eps);
+    const epsEstimate = pickNum(r.epsEstimated);
+    const revActual = pickNum(r.revenueActual, r.revenue);
+    const revEstimate = pickNum(r.revenueEstimated);
+    if (epsActual != null || epsEstimate != null || revActual != null || revEstimate != null) {
       return {
         ok: true,
         data: {
           symbol: symbol.toUpperCase(),
           date: r.date ?? "",
-          epsActual: typeof r.eps === "number" ? r.eps : null,
-          epsEstimate: typeof r.epsEstimated === "number" ? r.epsEstimated : null,
-          revActual: typeof r.revenue === "number" ? r.revenue : null,
-          revEstimate: typeof r.revenueEstimated === "number" ? r.revenueEstimated : null,
+          epsActual,
+          epsEstimate,
+          revActual,
+          revEstimate,
         },
       };
     }
