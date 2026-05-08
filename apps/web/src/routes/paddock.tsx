@@ -502,7 +502,10 @@ function ManualCronTriggerPanel() {
         cron: vars.cron,
         at: Date.now(),
         mode: vars.mode,
-        durationMs: "durationMs" in res ? res.durationMs : undefined,
+        durationMs:
+          vars.mode === "sync"
+            ? (res as unknown as { durationMs: number }).durationMs
+            : undefined,
       }),
   });
   const err = m.error as ApiError | null;
