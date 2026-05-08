@@ -57,33 +57,72 @@ export async function fetchFmpEarningsBatch(
       continue;
     }
     const fetched = await fetchOne(env, sym);
-    result[sym] = fetched;
-    if (fetched != null) {
-      await env.CACHE.put(cacheKey(sym), JSON.stringify(fetched), {
+    if (fetched.ok) {
+      result[sym] = fetched.data;
+      await env.CACHE.put(cacheKey(sym), JSON.stringify(fetched.data), {
         expirationTtl: PER_SYMBOL_TTL_SECONDS,
       });
+    } else {
+      console.warn(`fmp ${sym}: ${fetched.reason}`);
+      result[sym] = null;
     }
   }
   return { bySymbol: result, source: "fmp" };
 }
 
-async function fetchOne(env: Env, symbol: string): Promise<FmpEarnings | null> {
-  if (!env.FMP_API_KEY) return null;
-  const url = `https://financialmodelingprep.com/api/v3/historical/earning_calendar/${encodeURIComponent(symbol)}?apikey=${encodeURIComponent(env.FMP_API_KEY)}`;
-  let rows: FmpEarningsRow[];
-  try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`fmp earnings ${symbol} HTTP ${res.status}`);
-      return null;
-    }
-    rows = (await res.json()) as FmpEarningsRow[];
-  } catch (err) {
-    console.warn(`fmp earnings ${symbol} fetch error`, err);
-    return null;
-  }
-  if (!Array.isArray(rows) || rows.length === 0) return null;
+type FetchOneResult =
+  | { ok: true; data: FmpEarnings }
+  | { ok: false; reason: string };
 
+async function fetchOne(env: Env, symbol: string): Promise<FetchOneResult> {
+  if (!env.FMP_API_KEY) return { ok: false, reason: "FMP_API_KEY not set" };
+  const url = `https://financialmodelingprep.com/api/v3/historical/earning_calendar/${encodeURIComponent(symbol)}?apikey=${encodeURIComponent(env.FMP_API_KEY)}`;
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `fetch error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!res.ok) {
+    let body = "";
+    try {
+      body = (await res.text()).slice(0, 200);
+    } catch {
+      /* ignore */
+    }
+    return {
+      ok: false,
+      reason: `HTTP ${res.status} ${res.statusText}${body ? ` — ${body}` : ""}`,
+    };
+  }
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `bad JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  // FMP sometimes returns { "Error Message": "..." } as a 200 with an error
+  // payload (especially on free-tier endpoint restrictions or stale keys).
+  if (
+    payload != null &&
+    typeof payload === "object" &&
+    "Error Message" in (payload as Record<string, unknown>)
+  ) {
+    return {
+      ok: false,
+      reason: `FMP error: ${String((payload as Record<string, unknown>)["Error Message"])}`,
+    };
+  }
+  if (!Array.isArray(payload) || payload.length === 0) {
+    return { ok: false, reason: "FMP returned empty array" };
+  }
+  const rows = payload as FmpEarningsRow[];
   // Most recent first; pick the latest row that has at least one non-null field.
   const sorted = rows
     .filter((r) => typeof r.date === "string")
@@ -96,14 +135,21 @@ async function fetchOne(env: Env, symbol: string): Promise<FmpEarnings | null> {
       r.revenueEstimated != null
     ) {
       return {
-        symbol: symbol.toUpperCase(),
-        date: r.date ?? "",
-        epsActual: typeof r.eps === "number" ? r.eps : null,
-        epsEstimate: typeof r.epsEstimated === "number" ? r.epsEstimated : null,
-        revActual: typeof r.revenue === "number" ? r.revenue : null,
-        revEstimate: typeof r.revenueEstimated === "number" ? r.revenueEstimated : null,
+        ok: true,
+        data: {
+          symbol: symbol.toUpperCase(),
+          date: r.date ?? "",
+          epsActual: typeof r.eps === "number" ? r.eps : null,
+          epsEstimate: typeof r.epsEstimated === "number" ? r.epsEstimated : null,
+          revActual: typeof r.revenue === "number" ? r.revenue : null,
+          revEstimate: typeof r.revenueEstimated === "number" ? r.revenueEstimated : null,
+        },
       };
     }
   }
-  return null;
+  return { ok: false, reason: `no rows with EPS/revenue (got ${rows.length} entries)` };
+}
+
+export async function probeFmp(env: Env, symbol = "AAPL"): Promise<FetchOneResult> {
+  return fetchOne(env, symbol);
 }
