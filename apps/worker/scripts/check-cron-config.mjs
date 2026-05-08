@@ -13,7 +13,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const workerDir = path.resolve(here, "..");
 
 const EXPECTED_CRONS = [
-  "45 12 * * MON-FRI",      // factor warm (pre-premarket)
+  "45 12 * * *",            // factor warm — every day, incl weekends, so Mon premarket sees fresh KV
   "15 13 * * MON-FRI",      // premarket routine
   "35 13 * * MON-FRI",      // open routine
   "30 15 * * MON-FRI",      // midmorning routine
