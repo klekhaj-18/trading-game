@@ -118,19 +118,21 @@ const SECTIONS: FaqSection[] = [
         a: (
           <>
             Five trading routines per US trading day — premarket, open, mid-morning, afternoon,
-            and pre-close. Plus a "warm" slot 30 minutes before premarket that pre-fetches
-            market data so trading routines don't wait, and an equity-tick that snapshots your
-            Alpaca account every 5 minutes during market hours so the leaderboard moves in near
-            real time. The next routine fire-time shows on the Leaderboard banner. See the next
-            item for what each slot does.
+            and pre-close. Plus a "warm" slot every day at 08:45 ET (yes, weekends too) that
+            pre-fetches market data so trading routines don't wait, and an equity-tick that
+            snapshots your Alpaca account every 5 minutes during market hours so the leaderboard
+            moves in near real time. The next routine fire-time shows on the Leaderboard banner.
+            See the next item for what each slot does.
           </>
         ),
         technical: (
           <>
-            Seven Cloudflare Cron Triggers, fixed in UTC. Race-gated (no fires pre-race /
-            post-race), weekday-gated (Mon–Fri). Holidays are absorbed by Alpaca's market-closed
-            signal — routines run, but validators downgrade live orders to "plan" actions. The
-            5-min equity tick (<code>*/5 13-20 * * MON-FRI</code>) only hits Alpaca for the snapshot;
+            Seven Cloudflare Cron Triggers, fixed in UTC. Trading routines + equity tick are
+            weekday-gated (Mon–Fri); the warm runs every day, including weekends, so Monday's
+            09:15 slot never has to rebuild from a cold cache. All routines are race-gated (no
+            fires pre-race / post-race). Holidays are absorbed by Alpaca's market-closed signal —
+            routines run, but validators downgrade live orders to "plan" actions. The 5-min
+            equity tick (<code>*/5 13-20 * * MON-FRI</code>) only hits Alpaca for the snapshot;
             no Claude, no factor refresh — invisible on the Anthropic budget.
           </>
         ),
@@ -166,10 +168,11 @@ const SECTIONS: FaqSection[] = [
                     </td>
                     <td className="py-2 pr-3 text-[11px]">Haiku 4.5 (per-headline)</td>
                     <td className="py-2 text-zinc-400">
-                      Refresh the union universe across all approved players: news, daily bars,
-                      Finnhub profile/metrics/earnings, FRED macro, sector momentum, sentiment
-                      scoring. No LLM trade decisions, no orders. If this fails, the 09:15 slot
-                      runs an inline fallback.
+                      Refresh the union universe across all approved players: Alpaca news +
+                      bars, Finnhub profile/metrics/earnings, FMP earnings revenue, FRED macro,
+                      sector momentum, Haiku-classified per-headline sentiment. Runs every day
+                      (including weekends) so Monday's 09:15 slot has fresh data. No LLM trade
+                      decisions, no orders. If this fails, the 09:15 slot runs an inline fallback.
                     </td>
                   </tr>
                   <tr className="border-b border-zinc-900">
@@ -292,8 +295,11 @@ const SECTIONS: FaqSection[] = [
               positions, orders, clock, quotes, bars, news, tradable symbols);{" "}
               <span className="font-semibold text-zinc-200">Finnhub</span> (next earnings, profile,
               metrics, economic calendar);{" "}
+              <span className="font-semibold text-zinc-200">FMP</span> (earnings revenue
+              actual/estimate — what Finnhub free tier doesn't return);{" "}
               <span className="font-semibold text-zinc-200">FRED</span> (VIX, 10y-2y yield spread,
-              DXY — used by warm cron's regime card).
+              DXY — used by warm cron's regime card). See the "Where the data comes from" section
+              below for the full breakdown.
             </p>
             <p className="mt-2">
               The warm cron writes aggregated factor blobs to KV (sentiment-scored headlines,
@@ -302,6 +308,76 @@ const SECTIONS: FaqSection[] = [
               indirectly because their lib-level fetches (Alpaca news, daily bars, Finnhub
               earnings) hit the same KV caches the warm slot populates.
             </p>
+          </>
+        ),
+      },
+      {
+        q: "Where do I see what Claude saw when it made a decision?",
+        a: (
+          <>
+            <p className="mb-2">Two places, depending on how deep you want to go.</p>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">For each routine:</span> Pit Wall →
+              scroll to <span className="italic">Radio messages</span> → click any routine row to
+              expand. You'll see Claude's reasoning at the top, a{" "}
+              <span className="font-semibold">macro regime card</span> (VIX, 10y-2y yield spread,
+              DXY, top/bottom sectors), then one{" "}
+              <span className="font-semibold">decision card</span> per buy/sell/plan/hold. Each
+              decision card has a <span className="font-mono text-zinc-400">▸ Details</span> link
+              at the bottom — click it for the full per-symbol context Claude saw at the moment of
+              decision:
+            </p>
+            <ul className="mt-2 ml-4 space-y-1 list-disc text-zinc-300">
+              <li>
+                <span className="font-semibold">From your playbook</span> — the universe rationale
+                you wrote for that symbol
+              </li>
+              <li>
+                <span className="font-semibold">Market context</span> — bid/ask, day OHLC, today's
+                volume vs 30d avg, RSI 14, SMA 20/50/200 stack, vs-50d %, 52w hi/lo, ATR %, rel
+                vol
+              </li>
+              <li>
+                <span className="font-semibold">Last 5 sessions</span> — daily OHLCV, close
+                color-coded
+              </li>
+              <li>
+                <span className="font-semibold">Earnings</span> — EPS actual vs estimate with
+                surprise %, revenue actual vs estimate with surprise %, quarter + reporting hour
+              </li>
+              <li>
+                <span className="font-semibold">News & sentiment</span> — Claude-classified mood +
+                numeric score, bull/neutral/bear counts, headline list with per-headline label +
+                score + Claude's one-line rationale
+              </li>
+              <li>
+                <span className="font-semibold">Your position at decision time</span> — shares,
+                avg entry, unrealized P&amp;L, book weight, cash, buying power
+              </li>
+              <li>
+                <span className="font-semibold">Outcome</span> — order status / fill / timestamps;
+                or the validation reason that blocked it; or "no order placed" for plan/hold
+              </li>
+            </ul>
+            <p className="mt-3">
+              <span className="font-semibold text-zinc-200">For each FAQ item on this page:</span>{" "}
+              the gray <span className="font-mono text-zinc-400">+ Show the technical bit</span>{" "}
+              button below most answers reveals implementation detail — function names, file
+              paths, model configs, schema specifics. Useful when you want to know exactly what
+              code is running under a given behavior.
+            </p>
+          </>
+        ),
+        technical: (
+          <>
+            Detail is lazy-loaded via <code>/api/me/routine-runs/:id</code> only when you expand a
+            row — keeps the list payload small. The endpoint returns the parsed{" "}
+            <code>marketSnapshotJson</code> + <code>accountContextJson</code> columns from D1
+            (everything captured at routine fire time), plus the universe entries from the active{" "}
+            <code>operationalPlan</code>. Pre-deploy-of-this-feature routines render "Position
+            context not captured" gracefully where the column is empty. See the new{" "}
+            <span className="italic">"What's saved per routine"</span> section below for the row
+            schema and full JSON shape.
           </>
         ),
       },
@@ -584,6 +660,28 @@ const SECTIONS: FaqSection[] = [
           </>
         ),
       },
+      {
+        q: "What about the Paddock view — what does admin see there?",
+        a: (
+          <>
+            The Paddock (admin's home tab) shows a cross-user routines list — but only the{" "}
+            <span className="font-semibold">status</span> of each routine (succeeded / partial /
+            error / running). No reasoning, no decisions, no orders, no symbols. Admin can also
+            kill a stuck routine from there. The rich routine detail with reasoning + decisions +
+            market context lives only on <span className="font-semibold">your</span> Pit Wall,
+            scoped to your user id.
+          </>
+        ),
+        technical: (
+          <>
+            <code>/api/admin/routines</code> projects only{" "}
+            <code>{`{ id, userId, displayName, kind, scheduledSlot, status, startedAt, completedAt }`}</code>
+            . The detailed <code>/api/me/routine-runs/:id</code> enforces{" "}
+            <code>eq(routineRuns.userId, sessionUserId)</code> — spoofing a different user id in
+            the URL returns 404.
+          </>
+        ),
+      },
     ],
   },
   {
@@ -675,9 +773,311 @@ const SECTIONS: FaqSection[] = [
         ),
         technical: (
           <>
-            Union universe across all approved plans, scored once per warm and refreshed during
-            the day. If the warm fails, the premarket slot detects the missing successful run and
-            triggers an inline fallback refresh before routines fire.
+            Union universe across all approved plans, refreshed by the warm cron at 08:45 ET{" "}
+            <span className="font-semibold">every day</span> (including weekends — keeps Monday
+            warm). Per-symbol blob cached in KV: Alpaca news + bars, Finnhub
+            profile/metrics/earnings, FMP earnings revenue merged into the Finnhub earnings
+            record, computed technicals (SMA 20/50/200, RSI 14, ATR, 52w hi/lo, rel vol),
+            Haiku-classified per-headline sentiment with score + label + rationale. Plus a single
+            macro regime blob (FRED VIX/curve/DXY + sector momentum). If the warm fails, the
+            premarket slot detects the missing successful run and triggers an inline fallback
+            refresh.
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    title: "What's saved per routine",
+    blurb:
+      "Every routine writes one row to the routine_runs table. Here's what's in it and how to read it.",
+    items: [
+      {
+        q: "What columns are on a routine_runs row?",
+        a: (
+          <>
+            <p className="mb-2">
+              Every Claude run that fires — scheduled or fire-immediately — produces one row. The
+              row holds everything needed to reconstruct what Claude was looking at, what it
+              decided, and what happened. Plain English first, schema below.
+            </p>
+            <ul className="mt-2 ml-4 space-y-1 list-disc text-zinc-300">
+              <li>
+                <span className="font-semibold">Identity & context</span> — <code>id</code> (the
+                run's ULID), <code>userId</code>, <code>operationalPlanId</code> (the plan version
+                that was active), <code>kind</code> (scheduled / on_demand),{" "}
+                <code>scheduledSlot</code> (premarket/open/midmorning/afternoon/close/warm),{" "}
+                <code>oneShotInstruction</code> (intent text, when fire-immediate)
+              </li>
+              <li>
+                <span className="font-semibold">What Claude saw</span> —{" "}
+                <code>marketSnapshotJson</code> (full market context: quotes, bars, news with
+                per-headline sentiment, earnings, technicals, macro regime),{" "}
+                <code>accountContextJson</code> (equity, cash, buying power, positions, open
+                orders, recent fills at decision time)
+              </li>
+              <li>
+                <span className="font-semibold">What Claude did</span> — <code>claudeModel</code>,{" "}
+                <code>claudeReasoning</code> (the prose paragraph), <code>decisionsJson</code>{" "}
+                (decisions + validation failures + placed orders), token counts (
+                <code>inputTokens</code>, <code>outputTokens</code>, <code>cacheReadTokens</code>,{" "}
+                <code>cacheWriteTokens</code>)
+              </li>
+              <li>
+                <span className="font-semibold">Outcome</span> — <code>status</code> (running /
+                succeeded / partial / validation_failed / error / noop_market_closed /
+                noop_race_not_active), <code>errorText</code>, <code>startedAt</code>,{" "}
+                <code>completedAt</code>
+              </li>
+            </ul>
+          </>
+        ),
+        technical: (
+          <>
+            <p className="mb-2">
+              Drizzle schema in <code>apps/worker/src/db/schema.ts</code>:
+            </p>
+            <Code>{`export const routineRuns = sqliteTable("routine_runs", {
+  id: ulid(),
+  userId: text("user_id").notNull(),
+  operationalPlanId: text("operational_plan_id"),
+  kind: text("kind").notNull(),                  // scheduled | on_demand | admin_test
+  scheduledSlot: text("scheduled_slot"),         // premarket|open|midmorning|afternoon|close|warm
+  oneShotInstruction: text("one_shot_instruction"),
+  marketSnapshotJson: text("market_snapshot_json"),  // full snapshot at fire time
+  accountContextJson: text("account_context_json"),  // equity/positions/orders at fire time
+  claudeModel: text("claude_model"),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  cacheReadTokens: integer("cache_read_tokens"),
+  cacheWriteTokens: integer("cache_write_tokens"),
+  claudeReasoning: text("claude_reasoning"),
+  decisionsJson: text("decisions_json"),
+  status: text("status").notNull(),
+  errorText: text("error_text"),
+  startedAt: integer("started_at").notNull(),
+  completedAt: integer("completed_at"),
+});`}</Code>
+          </>
+        ),
+      },
+      {
+        q: "What's inside marketSnapshotJson?",
+        a: (
+          <>
+            <p className="mb-2">
+              Everything Claude saw about the market when the routine fired. Quotes, bars, news,
+              sentiment, technicals, earnings, and the macro regime card — all in one JSON blob.
+              The same blob the LLM was prompted with.
+            </p>
+            <p className="mb-2">
+              Per-symbol slice (one entry per stock in your plan's universe): bid/ask quote, last
+              5 daily OHLCV bars, last 5 news headlines (each with Claude-scored sentiment label,
+              score, and one-line rationale), the next earnings date, computed technicals (SMAs,
+              RSI, ATR, 52w hi/lo, relative volume), and the per-symbol sentiment summary.
+            </p>
+            <p>
+              Plus a <span className="font-semibold">broader-market</span> slice (SPY, QQQ, VIXY)
+              and a <span className="font-semibold">regime</span> card (VIX from FRED, 10y-2y
+              yield spread, DXY, sector momentum from SPDR sleeve 20-day returns).
+            </p>
+          </>
+        ),
+        technical: (
+          <>
+            <p className="mb-2">
+              Defined in <code>apps/worker/src/trading/snapshot.ts</code>:
+            </p>
+            <Code>{`interface MarketSnapshot {
+  asOf: string;
+  marketIsOpen: boolean;
+  nextOpen: string;
+  nextClose: string;
+  symbols: {
+    symbol: string;
+    lastQuote: { bid; ask; mid } | null;
+    dailyBars: { date; open; high; low; close; volume }[];
+    news: {
+      headline; source; createdAt;
+      score?: number;            // -1..+1, Haiku-classified
+      label?: "bullish" | "bearish" | "neutral" | "mixed";
+      rationale?: string;        // Claude's one-line read
+    }[];
+    earnings: EarningsItem | null;             // EPS + revenue actual/estimate
+    earningsHint: string | null;
+    sentiment: SymbolSentimentSummary | null;  // mood + counts + top headlines
+    technicals: TechnicalsCard | null;          // SMA, RSI, ATR, 52w, relVol
+  }[];
+  broaderMarket: { symbol; label; lastQuote; dailyBars }[];
+  regime: AggregatedRegime | null;     // VIX, 10y-2y, DXY, sector momentum
+  factorSource: "warm" | "cold";       // "cold" if KV agg blobs missed
+}`}</Code>
+          </>
+        ),
+      },
+      {
+        q: "What's inside accountContextJson?",
+        a: (
+          <>
+            Your Alpaca account state at the exact moment the routine fired. So when you're
+            looking at a decision a week later, you can see "I had $18K cash and was already 14%
+            in AAPL when Claude decided to add 5 more shares" — not whatever your account looks
+            like now. Snapshot includes equity, cash, buying power, long market value, every open
+            position (qty, avg entry, current, unrealized P&L), every working order, and the last
+            10 fills.
+          </>
+        ),
+        technical: (
+          <>
+            <p className="mb-2">
+              Defined in <code>apps/worker/src/trading/snapshot.ts</code>:
+            </p>
+            <Code>{`interface AccountContext {
+  accountId: string;
+  equity: number;
+  cash: number;
+  buyingPower: number;
+  longMarketValue: number;
+  dayUnrealizedPl: number;
+  positions: {
+    symbol; qty; avgEntry; current; unrealizedPl; unrealizedPlPct;
+  }[];
+  openOrders: {
+    id; symbol; side; qty; type; limitPrice; timeInForce; status; submittedAtIso;
+  }[];
+  recentFills: (OpenOrderSummary & {
+    filledQty; filledAvgPrice; filledAtIso;
+  })[];
+}`}</Code>
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    title: "Where the data comes from",
+    blurb:
+      "Every routine is a function of two things: the playbook you wrote, and the market data Claude reads when it fires. Here's where each piece comes from.",
+    items: [
+      {
+        q: "Alpaca paper API — broker + market data",
+        a: (
+          <>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">What we get:</span> account (equity,
+              cash, buying power, day P&L), positions (qty, avg entry, current, unrealized P&L),
+              open orders + last 10 fills, market clock, latest quotes (bid/ask) per plan symbol,
+              daily bars (last 5 for snapshots, 220 for technicals), 48h news per symbol,
+              tradability, and order placement.
+            </p>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">How Claude uses it:</span> account +
+              positions + open orders are the cached <span className="italic">Account</span>{" "}
+              prompt layer. Quotes + bars + news live in the fresh{" "}
+              <span className="italic">Market snapshot</span> layer. The validator uses
+              tradability to reject decisions on unsupported symbols before they reach Alpaca.
+            </p>
+            <p className="text-zinc-400">
+              <span className="font-semibold text-zinc-300">Why we picked it:</span> free paper
+              trading, real intraday data, simple REST API, doubles as broker so we don't glue two
+              providers together.
+            </p>
+          </>
+        ),
+      },
+      {
+        q: "Finnhub — earnings calendar + fundamentals",
+        a: (
+          <>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">What we get:</span> next earnings
+              (date, hour, EPS estimate, EPS actual when reported), company profile (sector,
+              industry, market cap), key metrics (P/E, P/S, ROE, dividend yield), 14-day economic
+              calendar.
+            </p>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">How Claude uses it:</span> earnings
+              hint goes into the per-symbol market snapshot ("Q1 reports in 3 days, AMC, $2.11 EPS
+              est"). Sector + market cap into the universe context the coach uses when revising
+              playbooks.
+            </p>
+            <p className="text-zinc-400">
+              <span className="font-semibold text-zinc-300">Constraint:</span> free tier — EPS
+              only, no revenue. That's why FMP exists.
+            </p>
+          </>
+        ),
+      },
+      {
+        q: "FMP (Financial Modeling Prep) — revenue actuals",
+        a: (
+          <>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">What we get:</span>{" "}
+              <code>revActual</code> / <code>revEstimate</code> for the most recently reported (or
+              upcoming) quarter, plus EPS as a Finnhub fallback.
+            </p>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">How Claude uses it:</span> the
+              earnings card shows revenue surprise % alongside EPS surprise %. Lets Claude tell
+              "EPS beat from genuine revenue acceleration" apart from "EPS beat that's just
+              buyback math".
+            </p>
+            <p className="text-zinc-400">
+              <span className="font-semibold text-zinc-300">Constraint:</span> free tier — 250
+              req/day, max 5 results per call. Batched per warm-cron run, KV-cached by symbol.
+            </p>
+          </>
+        ),
+      },
+      {
+        q: "FRED (Federal Reserve Economic Data) — macro regime",
+        a: (
+          <>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">What we get:</span> three series —{" "}
+              <span className="font-semibold">VIX</span> (<code>VIXCLS</code>) implied
+              volatility / fear gauge; <span className="font-semibold">10y-2y yield spread</span>{" "}
+              (<code>T10Y2Y</code>) recession indicator (negative = inverted curve);{" "}
+              <span className="font-semibold">DXY</span> (<code>DTWEXBGS</code>) trade-weighted
+              dollar strength index.
+            </p>
+            <p className="mb-2">
+              <span className="font-semibold text-zinc-200">How Claude uses it:</span> feeds the
+              macro regime card at the top of every routine. Sector momentum (top/bottom 3 SPDR
+              sleeves by 20-day return) is computed from Alpaca bars, not FRED.
+            </p>
+            <p className="text-zinc-400">
+              <span className="font-semibold text-zinc-300">Constraint:</span> free, no rate
+              limits, but end-of-day data only — values lag 1 trading day.
+            </p>
+          </>
+        ),
+      },
+      {
+        q: "Anthropic API — Claude itself",
+        a: (
+          <>
+            <ul className="mt-2 ml-4 space-y-1.5 list-disc text-zinc-300">
+              <li>
+                <span className="font-semibold">Opus 4.7</span> — plan translation (your
+                playbook → operational plan), premarket and close routines.
+              </li>
+              <li>
+                <span className="font-semibold">Sonnet 4.6</span> — open / mid-morning / afternoon
+                routines + the conversational coach.
+              </li>
+              <li>
+                <span className="font-semibold">Haiku 4.5</span> — per-headline sentiment
+                classification (label + score + one-line rationale), runs during the warm cron
+                and KV-cached so re-classification only hits the API for new headlines.
+              </li>
+            </ul>
+            <p className="mt-3 text-zinc-400">
+              Each trading routine has 3 prompt cache breakpoints (system → plan → account) with
+              the market snapshot fresh on top. After the first routine of the day, every
+              subsequent fire hits the cache for ~80% of input tokens.
+            </p>
           </>
         ),
       },
@@ -766,6 +1166,14 @@ function SectionBlock({ section }: { section: FaqSection }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function Code({ children }: { children: ReactNode }) {
+  return (
+    <pre className="my-2 overflow-x-auto rounded border border-zinc-800 bg-black/60 p-3 text-[11px] leading-relaxed text-zinc-300">
+      <code className="!bg-transparent !p-0 !text-[11px]">{children}</code>
+    </pre>
   );
 }
 
