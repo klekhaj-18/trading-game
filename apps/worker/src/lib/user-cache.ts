@@ -2,5 +2,6 @@ export async function invalidateUserAlpacaCaches(env: Env, userId: string): Prom
   await Promise.allSettled([
     env.CACHE.delete(`open-orders:${userId}`),
     env.CACHE.delete(`positions:${userId}`),
+    env.CACHE.delete(`recent-fills:${userId}`),
   ]);
 }

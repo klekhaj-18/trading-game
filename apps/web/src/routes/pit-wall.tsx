@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IntentSummary } from "shared/intent";
 import type { PlaybookCurrentResponse } from "shared/playbook";
-import { ApiError, api, type EquityPoint, type OpenOrderSummary, type PositionSummary, type RoutineRunSummary } from "../lib/api";
+import { ApiError, api, type EquityPoint, type OpenOrderSummary, type PositionSummary, type RecentFillSummary, type RoutineRunSummary } from "../lib/api";
 import { cn } from "../lib/utils";
 
 type Range = "24h" | "7d" | "30d";
@@ -19,6 +19,7 @@ export function PitWallPage() {
   const pbQ = useQuery({ queryKey: ["playbook"], queryFn: api.playbookCurrent });
   const posQ = useQuery({ queryKey: ["me", "positions"], queryFn: api.mePositions, refetchInterval: 30_000 });
   const ordersQ = useQuery({ queryKey: ["me", "open-orders"], queryFn: api.meOpenOrders, refetchInterval: 30_000 });
+  const fillsQ = useQuery({ queryKey: ["me", "recent-fills"], queryFn: api.meRecentFills, refetchInterval: 60_000 });
   const intentsQ = useQuery({ queryKey: ["me", "intents"], queryFn: api.meIntents, refetchInterval: 60_000 });
   const pnlQ = useQuery({ queryKey: ["me", "pnl-split"], queryFn: api.mePnlSplit, refetchInterval: 60_000 });
   const raceQ = useQuery({ queryKey: ["race"], queryFn: api.raceState, refetchInterval: 60_000 });
@@ -129,6 +130,18 @@ export function PitWallPage() {
         )}
       </div>
 
+      <div>
+        <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase mb-3">Recent fills</div>
+        {fillsQ.isError ? (
+          <FetchErrorBanner
+            label="recent fills"
+            message={fillsQ.error instanceof Error ? fillsQ.error.message : "Couldn't load from Alpaca"}
+          />
+        ) : (
+          <RecentFillsTable fills={fillsQ.data?.fills ?? []} />
+        )}
+      </div>
+
       <IntentsSection
         pending={intentsQ.data?.pending ?? []}
         recent={intentsQ.data?.recent ?? []}
@@ -142,6 +155,102 @@ export function PitWallPage() {
         </div>
         <RoutineList runs={runsQ.data?.runs ?? []} />
       </div>
+    </div>
+  );
+}
+
+function RecentFillsTable({ fills }: { fills: RecentFillSummary[] }) {
+  if (fills.length === 0) {
+    return (
+      <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] text-sm text-zinc-500 text-center py-8">
+        No recent fills.
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="sm:hidden space-y-3">
+        {fills.map((f) => (
+          <RecentFillCard key={f.id} fill={f} />
+        ))}
+      </div>
+      <div className="hidden sm:block rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-black/40 text-[10px] tracking-wider text-zinc-500 uppercase">
+            <tr>
+              <th className="text-left px-4 py-2">Symbol</th>
+              <th className="text-left px-4 py-2">Side</th>
+              <th className="text-right px-4 py-2">Filled qty</th>
+              <th className="text-right px-4 py-2">Avg price</th>
+              <th className="text-right px-4 py-2">Notional</th>
+              <th className="text-left px-4 py-2">Status</th>
+              <th className="text-right px-4 py-2">When</th>
+            </tr>
+          </thead>
+          <tbody className="tabular-digits">
+            {fills.map((f) => (
+              <RecentFillRow key={f.id} fill={f} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function RecentFillRow({ fill: f }: { fill: RecentFillSummary }) {
+  const notional = f.filledAvgPrice != null ? f.filledQty * f.filledAvgPrice : null;
+  const sideTone = f.side === "buy" ? "text-emerald-300" : "text-amber-300";
+  const statusTone = f.status === "filled"
+    ? "text-emerald-400"
+    : f.status === "canceled" || f.status === "expired" || f.status === "rejected"
+      ? "text-zinc-500"
+      : "text-zinc-300";
+  const whenSec = f.filledAt ?? f.submittedAt;
+  return (
+    <tr className="border-t border-zinc-900">
+      <td className="px-4 py-2 font-bold">{f.symbol}</td>
+      <td className={cn("px-4 py-2 uppercase text-xs", sideTone)}>{f.side}</td>
+      <td className="px-4 py-2 text-right">{f.filledQty}</td>
+      <td className="px-4 py-2 text-right">
+        {f.filledAvgPrice != null ? `$${f.filledAvgPrice.toFixed(2)}` : "—"}
+      </td>
+      <td className="px-4 py-2 text-right">{notional != null ? fmtUsd(notional) : "—"}</td>
+      <td className={cn("px-4 py-2 text-xs uppercase tracking-wider", statusTone)}>{f.status}</td>
+      <td className="px-4 py-2 text-right text-xs text-zinc-500">{fmtTime(whenSec)}</td>
+    </tr>
+  );
+}
+
+function RecentFillCard({ fill: f }: { fill: RecentFillSummary }) {
+  const notional = f.filledAvgPrice != null ? f.filledQty * f.filledAvgPrice : null;
+  const sideTone = f.side === "buy" ? "text-emerald-300" : "text-amber-300";
+  const whenSec = f.filledAt ?? f.submittedAt;
+  return (
+    <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-base font-bold">{f.symbol}</span>
+        <span className={cn("text-xs uppercase font-semibold", sideTone)}>{f.side}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mt-2 text-xs tabular-digits">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Filled qty</div>
+          <div className="mt-0.5">{f.filledQty}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Avg price</div>
+          <div className="mt-0.5">{f.filledAvgPrice != null ? `$${f.filledAvgPrice.toFixed(2)}` : "—"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Notional</div>
+          <div className="mt-0.5">{notional != null ? fmtUsd(notional) : "—"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Status</div>
+          <div className="mt-0.5 uppercase">{f.status}</div>
+        </div>
+      </div>
+      <div className="mt-2 text-[10px] text-zinc-500">{fmtTime(whenSec)}</div>
     </div>
   );
 }
@@ -711,6 +820,7 @@ function PositionCard({ position: p }: { position: PositionSummary }) {
       Promise.all([
         qc.invalidateQueries({ queryKey: POS_KEY }),
         qc.invalidateQueries({ queryKey: ["me", "open-orders"] }),
+        qc.invalidateQueries({ queryKey: ["me", "recent-fills"] }),
       ]),
   });
   const plColor =
@@ -781,6 +891,7 @@ function PositionRow({ position: p }: { position: PositionSummary }) {
       Promise.all([
         qc.invalidateQueries({ queryKey: POS_KEY }),
         qc.invalidateQueries({ queryKey: ["me", "open-orders"] }),
+        qc.invalidateQueries({ queryKey: ["me", "recent-fills"] }),
       ]),
   });
 
@@ -964,6 +1075,13 @@ function fmtDate(unixSec: number): string {
   return new Date(unixSec * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function fmtTime(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  const sameDay = new Date().toDateString() === d.toDateString();
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return sameDay ? time : `${fmtDate(unixSec)} ${time}`;
+}
+
 function DirectOrderComposer({ onDone }: { onDone: () => void }) {
   const qc = useQueryClient();
   const [symbol, setSymbol] = useState("");
@@ -986,6 +1104,7 @@ function DirectOrderComposer({ onDone }: { onDone: () => void }) {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["me", "open-orders"] });
       await qc.invalidateQueries({ queryKey: ["me", "positions"] });
+      await qc.invalidateQueries({ queryKey: ["me", "recent-fills"] });
       onDone();
     },
   });
