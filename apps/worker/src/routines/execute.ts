@@ -248,6 +248,7 @@ export async function executeRoutine(env: Env, input: ExecuteRoutineInput): Prom
           orders: placed,
         }),
         marketSnapshotJson: JSON.stringify(snapshot),
+        accountContextJson: JSON.stringify(account),
         status,
         completedAt: Math.floor(Date.now() / 1000),
       })

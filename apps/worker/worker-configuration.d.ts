@@ -9,4 +9,5 @@ interface Env {
   SESSION_JWT_SECRET: string;
   FINNHUB_API_KEY?: string;
   FRED_API_KEY?: string;
+  FMP_API_KEY?: string;
 }

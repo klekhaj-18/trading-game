@@ -17,6 +17,7 @@ import {
   type AlpacaCreds,
 } from "../lib/alpaca";
 import { fetchNextEarnings, formatEarningsHint, type EarningsItem } from "../lib/finnhub";
+import { fetchFmpEarningsBatch, type FmpEarnings } from "../lib/fmp";
 import type { SymbolSentimentSummary } from "../lib/sentiment";
 import type { TechnicalsCard } from "../lib/technicals";
 import {
@@ -169,7 +170,7 @@ export async function buildMarketSnapshot(
   const planSymbols = Array.from(new Set(symbols.map((s) => s.toUpperCase()))).slice(0, 40);
   const broaderSymbols = BROADER_MARKET.map((b) => b.symbol);
   const allSymbols = Array.from(new Set([...planSymbols, ...broaderSymbols]));
-  const [clock, quotes, bars, news, earnings, aggSymbols, regime] = await Promise.all([
+  const [clock, quotes, bars, news, earnings, fmpEarnings, aggSymbols, regime] = await Promise.all([
     fetchClock(creds),
     fetchLatestQuotes(creds, allSymbols).catch(
       () => ({}) as Record<string, { bid: number; ask: number; last: number }>,
@@ -179,9 +180,52 @@ export async function buildMarketSnapshot(
       () => ({}) as Record<string, AlpacaNewsItem[]>,
     ),
     fetchNextEarnings(env, planSymbols),
+    fetchFmpEarningsBatch(env, planSymbols).catch(
+      () =>
+        ({ bySymbol: {} as Record<string, FmpEarnings | null>, source: "disabled" as const }),
+    ),
     Promise.all(planSymbols.map((s) => readAggregatedSymbolFactors(env, s).catch(() => null))),
     readAggregatedRegime(env).catch(() => null),
   ]);
+
+  // Merge FMP revenue + EPS data into the Finnhub-sourced EarningsItem.
+  // Finnhub free returns EPS only; FMP fills in revActual/revEstimate where it
+  // can. If FMP has more recent EPS data (e.g. a freshly-reported quarter that
+  // Finnhub hasn't refreshed yet), prefer those too.
+  const mergedEarnings: Record<string, EarningsItem | null> = {};
+  for (const [sym, finn] of Object.entries(earnings.bySymbol)) {
+    const fmp = fmpEarnings.bySymbol[sym];
+    if (!finn && !fmp) {
+      mergedEarnings[sym] = null;
+      continue;
+    }
+    if (!finn && fmp) {
+      mergedEarnings[sym] = {
+        symbol: sym,
+        date: fmp.date,
+        hour: "",
+        epsActual: fmp.epsActual,
+        epsEstimate: fmp.epsEstimate,
+        revActual: fmp.revActual,
+        revEstimate: fmp.revEstimate,
+        quarter: null,
+        year: null,
+      };
+      continue;
+    }
+    if (finn && fmp) {
+      mergedEarnings[sym] = {
+        ...finn,
+        epsActual: finn.epsActual ?? fmp.epsActual,
+        epsEstimate: finn.epsEstimate ?? fmp.epsEstimate,
+        revActual: finn.revActual ?? fmp.revActual,
+        revEstimate: finn.revEstimate ?? fmp.revEstimate,
+      };
+      continue;
+    }
+    mergedEarnings[sym] = finn ?? null;
+  }
+  const earningsLookup = { bySymbol: mergedEarnings, source: earnings.source };
   const aggBySymbol = new Map<string, (typeof aggSymbols)[number]>();
   planSymbols.forEach((s, i) => aggBySymbol.set(s, aggSymbols[i] ?? null));
   const anyAggHit = aggSymbols.some((b) => b != null) || regime != null;
@@ -209,7 +253,7 @@ export async function buildMarketSnapshot(
       source: n.source,
       createdAt: n.createdAt,
     }));
-    const earn = earnings.bySymbol[sym] ?? null;
+    const earn = earningsLookup.bySymbol[sym] ?? null;
     const agg = aggBySymbol.get(sym) ?? null;
     return {
       ...base,
@@ -230,7 +274,7 @@ export async function buildMarketSnapshot(
       label: b.label,
       ...renderBroader(b.symbol),
     })),
-    earningsSource: earnings.source,
+    earningsSource: earningsLookup.source,
     regime,
     factorSource: anyAggHit ? "warm" : "cold",
   };

@@ -417,7 +417,28 @@ meRoutes.get("/routine-runs/:id", async (c) => {
     .where(and(eq(routineRuns.id, id), eq(routineRuns.userId, user.id)))
     .limit(1);
   if (!row) return c.json({ error: "not_found" }, 404);
-  return c.json({ run: serializeRun(row) });
+  // The detail endpoint also returns the captured market snapshot and account
+  // context (parsed). The list endpoint stays lean — the heavy fields are only
+  // sent when a row is expanded.
+  let marketSnapshot: unknown = null;
+  let accountContext: unknown = null;
+  if (row.marketSnapshotJson) {
+    try {
+      marketSnapshot = JSON.parse(row.marketSnapshotJson);
+    } catch {
+      /* malformed — leave null */
+    }
+  }
+  if (row.accountContextJson) {
+    try {
+      accountContext = JSON.parse(row.accountContextJson);
+    } catch {
+      /* malformed — leave null */
+    }
+  }
+  return c.json({
+    run: { ...serializeRun(row), marketSnapshot, accountContext },
+  });
 });
 
 meRoutes.get("/equity-series", async (c) => {
