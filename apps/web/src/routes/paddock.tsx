@@ -1,18 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { RoutineSlot } from "shared/routine";
-import { ROUTINE_SLOTS } from "shared/routine";
 import { TEAM_COLOR_META, type TeamColor } from "shared/auth";
-import { api, ApiError, type AdminTestRun, type RosterPlayer } from "../lib/api";
+import { api, ApiError, type AdminRoutineRow, type RosterPlayer } from "../lib/api";
 import { cn } from "../lib/utils";
-
-const SLOT_LABELS: Record<RoutineSlot, string> = {
-  premarket: "09:15 · Premarket",
-  open: "09:35 · Open",
-  midmorning: "11:30 · Midmorning",
-  afternoon: "14:00 · Afternoon",
-  close: "15:45 · Close",
-};
 
 const RACE_DURATION_DAYS = 30;
 
@@ -569,114 +559,99 @@ function ManualCronTriggerPanel() {
 }
 
 export function PaddockPage() {
+  return (
+    <div className="space-y-6">
+      <RaceControlPanel />
+      <ManualCronTriggerPanel />
+      <AllRoutinesPanel />
+      <TestOrderPanel />
+    </div>
+  );
+}
+
+function AllRoutinesPanel() {
   const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+
   const runsQ = useQuery({
-    queryKey: ["admin", "test-runs"],
-    queryFn: api.adminTestRuns,
+    queryKey: ["admin", "routines"],
+    queryFn: () => api.adminListRoutines(50),
     refetchInterval: (q) => {
-      const data = q.state.data as { runs: AdminTestRun[] } | undefined;
+      const data = q.state.data as { runs: AdminRoutineRow[] } | undefined;
       if (data?.runs.some((r) => r.status === "running")) return 2000;
       return false;
     },
   });
 
-  const [instruction, setInstruction] = useState("");
-
-  const fireM = useMutation({
-    mutationFn: (slot: RoutineSlot) =>
-      api.fireTestRoutine({ slot, oneShotInstruction: instruction.trim() || undefined }),
-    onSuccess: () => {
-      setInstruction("");
-      qc.invalidateQueries({ queryKey: ["admin", "test-runs"] });
-    },
+  const killM = useMutation({
+    mutationFn: (id: string) => api.adminKillRoutine(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "routines"] }),
   });
 
-  const resetM = useMutation({
-    mutationFn: api.resetAdminTestData,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "test-runs"] }),
-  });
-
-  const err = (fireM.error ?? resetM.error) as ApiError | null;
+  const runs = runsQ.data?.runs ?? [];
+  const runningCount = runs.filter((r) => r.status === "running").length;
+  const err = (runsQ.error ?? killM.error) as ApiError | null;
 
   return (
-    <div className="space-y-6">
-      <RaceControlPanel />
-
-      <ManualCronTriggerPanel />
-
-      <div>
-        <div className="text-xs tracking-[0.3em] text-zinc-500 uppercase">Solo-test</div>
-        <div className="text-2xl font-black tracking-tight mt-1">Fire a routine</div>
-        <div className="mt-1 text-sm text-zinc-500">
-          Fire any routine slot against your own Alpaca paper account. Runs are tagged
-          <span className="text-zinc-300 font-mono"> admin_test</span> and can be wiped before the real race locks.
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-[var(--color-race-border)] bg-[var(--color-race-panel)] p-4">
-        <label className="block mb-3">
-          <div className="mb-1.5 text-[10px] tracking-wider text-zinc-500 uppercase">
-            One-shot instruction (optional) — appended to the prompt as USER URGENT INSTRUCTION
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-baseline justify-between gap-3 text-left"
+      >
+        <div>
+          <div className="text-xs tracking-[0.3em] text-zinc-500 uppercase">Admin</div>
+          <div className="text-2xl font-black tracking-tight mt-1">
+            All routines
+            {runningCount > 0 && (
+              <span className="ml-3 align-middle text-[11px] font-bold uppercase tracking-wider rounded px-2 py-0.5 border border-amber-500/60 bg-amber-500/15 text-amber-200">
+                {runningCount} running
+              </span>
+            )}
+            {runs.length > 0 && runningCount === 0 && (
+              <span className="ml-3 align-middle text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+                {runs.length} recent
+              </span>
+            )}
           </div>
-          <textarea
-            className="w-full min-h-[60px] rounded bg-black/60 border border-zinc-800 px-3 py-2 text-sm outline-none focus:border-zinc-500"
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            placeholder="e.g. I just saw NVDA gap up premarket — lean into that if it holds the gap."
-          />
-        </label>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          {ROUTINE_SLOTS.map((s) => (
-            <button
-              key={s}
-              onClick={() => fireM.mutate(s)}
-              disabled={fireM.isPending}
-              className={cn(
-                "rounded border border-zinc-700 bg-black/40 px-3 py-2 text-xs tracking-wider uppercase whitespace-nowrap",
-                "hover:border-zinc-500 disabled:opacity-40",
-              )}
-            >
-              {fireM.isPending && fireM.variables === s ? "running…" : SLOT_LABELS[s].split(" · ")[1]}
-            </button>
+        </div>
+        <span className="text-zinc-500 text-lg">{open ? "▾" : "▸"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-3">
+          {err && (
+            <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+              {err.message}
+            </div>
+          )}
+          {runsQ.isLoading && <div className="text-sm text-zinc-500">Loading…</div>}
+          {!runsQ.isLoading && runs.length === 0 && (
+            <div className="rounded border border-dashed border-zinc-800 p-8 text-center text-sm text-zinc-500">
+              No routine runs yet.
+            </div>
+          )}
+          {runs.map((r) => (
+            <RunCard
+              key={r.id}
+              run={r}
+              onKill={
+                r.status === "running"
+                  ? () => {
+                      if (
+                        confirm(
+                          `Kill routine for ${r.displayName}?\n\nslot: ${r.scheduledSlot ?? "—"}\nkind: ${r.kind}\nstarted: ${new Date(r.startedAt * 1000).toLocaleTimeString()}`,
+                        )
+                      ) {
+                        killM.mutate(r.id);
+                      }
+                    }
+                  : undefined
+              }
+              killPending={killM.isPending && killM.variables === r.id}
+            />
           ))}
         </div>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-[10px] text-zinc-600">
-          <span>Haiku 4.5 · validation layer on · orders land in your paper account</span>
-          <button
-            onClick={() => resetM.mutate()}
-            disabled={resetM.isPending || !runsQ.data?.runs.length}
-            className="underline hover:text-zinc-400 disabled:opacity-40 text-left sm:text-right"
-          >
-            Reset admin_test data
-          </button>
-        </div>
-      </div>
-
-      {err && (
-        <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200">
-          {err.message}
-        </div>
       )}
-
-      <TestOrderPanel />
-
-      <div className="space-y-3">
-        <div className="flex items-baseline justify-between">
-          <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase">Recent test runs</div>
-          <div className="text-[10px] text-zinc-600">auto-refreshes while any run is in flight</div>
-        </div>
-        {runsQ.isLoading && (
-          <div className="text-sm text-zinc-500">Loading…</div>
-        )}
-        {runsQ.data?.runs.length === 0 && (
-          <div className="rounded border border-dashed border-zinc-800 p-8 text-center text-sm text-zinc-500">
-            No test runs yet. Fire a slot above.
-          </div>
-        )}
-        {(runsQ.data?.runs ?? []).map((r) => (
-          <RunCard key={r.id} run={r} />
-        ))}
-      </div>
     </div>
   );
 }
@@ -773,7 +748,15 @@ function TestOrderPanel() {
   );
 }
 
-function RunCard({ run }: { run: AdminTestRun }) {
+function RunCard({
+  run,
+  onKill,
+  killPending,
+}: {
+  run: AdminRoutineRow;
+  onKill?: () => void;
+  killPending?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const started = new Date(run.startedAt * 1000);
   const statusClass =
@@ -782,7 +765,7 @@ function RunCard({ run }: { run: AdminTestRun }) {
       : run.status === "partial"
         ? "text-amber-300 border-amber-900/60 bg-amber-950/30"
         : run.status === "running"
-          ? "text-zinc-300 border-zinc-700 bg-zinc-800"
+          ? "text-amber-200 border-amber-700 bg-amber-950/30"
           : run.status === "validation_failed"
             ? "text-red-300 border-red-900/60 bg-red-950/30"
             : run.status === "error"
@@ -791,11 +774,12 @@ function RunCard({ run }: { run: AdminTestRun }) {
 
   return (
     <div className="rounded border border-zinc-800 bg-[var(--color-race-panel)] p-4">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-baseline justify-between gap-3"
-      >
-        <div className="flex items-baseline gap-3 min-w-0">
+      <div className="flex items-baseline justify-between gap-3">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-baseline gap-3 min-w-0 flex-1 text-left"
+        >
+          <span className="text-xs font-bold text-zinc-200 truncate">{run.displayName}</span>
           <span className="text-xs tracking-wider text-zinc-500 uppercase font-mono">
             {run.scheduledSlot ?? "—"}
           </span>
@@ -810,6 +794,7 @@ function RunCard({ run }: { run: AdminTestRun }) {
           <span className="text-[10px] text-zinc-600 tabular-digits">
             {started.toLocaleTimeString()}
           </span>
+          <span className="text-[10px] text-zinc-600">{run.kind}</span>
           {run.orders.length > 0 && (
             <span className="text-[10px] text-emerald-400">
               {run.orders.length} order{run.orders.length === 1 ? "" : "s"}
@@ -820,9 +805,20 @@ function RunCard({ run }: { run: AdminTestRun }) {
               {run.validationFailures.length} failure{run.validationFailures.length === 1 ? "" : "s"}
             </span>
           )}
-        </div>
-        <span className="text-zinc-600">{open ? "▾" : "▸"}</span>
-      </button>
+        </button>
+        {onKill && (
+          <button
+            onClick={onKill}
+            disabled={killPending}
+            className="text-[10px] uppercase tracking-wider rounded border border-red-700 bg-red-950/40 px-2 py-1 text-red-200 hover:bg-red-900/50 disabled:opacity-40"
+          >
+            {killPending ? "killing…" : "kill"}
+          </button>
+        )}
+        <button onClick={() => setOpen((v) => !v)} className="text-zinc-600 px-1">
+          {open ? "▾" : "▸"}
+        </button>
+      </div>
 
       {open && (
         <div className="mt-4 space-y-4 text-sm">

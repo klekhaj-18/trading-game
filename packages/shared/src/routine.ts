@@ -91,12 +91,6 @@ export interface PlacedOrderSummary {
   filledAvgPrice: string | null;
 }
 
-export const fireTestRoutineSchema = z.object({
-  slot: z.enum(ROUTINE_SLOTS),
-  oneShotInstruction: z.string().trim().max(2000).optional(),
-});
-export type FireTestRoutineInput = z.infer<typeof fireTestRoutineSchema>;
-
 export const FIRE_NOW_HOURLY_LIMIT = 5;
 export const FIRE_NOW_DAILY_LIMIT = 15;
 
