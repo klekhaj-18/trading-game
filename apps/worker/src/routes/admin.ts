@@ -422,7 +422,8 @@ adminRoutes.post("/factors/probe", async (c) => {
   }
   try {
     const result = await runConnectivityProbe(c.env, creds);
-    const allOk = result.finnhub.ok && result.fred.ok && result.alpacaNews.ok;
+    const allOk =
+      result.finnhub.ok && result.fred.ok && result.alpacaNews.ok && result.fmp.ok;
     return c.json({ ok: allOk, ...result });
   } catch (err) {
     console.error("factors probe error", err);

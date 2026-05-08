@@ -117,6 +117,13 @@ export interface RoutineRunSummary {
  * decision/reasoning/order/token detail — admin is also a player, so per-row
  * content would leak competitor strategy. Owners get the rich view on Pit Wall.
  */
+export interface ProbeStatus {
+  ok: boolean;
+  source: string;
+  reason?: string;
+  sample?: unknown;
+}
+
 export interface AdminRoutineSummary {
   id: string;
   userId: string;
@@ -216,6 +223,15 @@ export const api = {
 
   adminListRoutines: (limit = 50) =>
     request<{ runs: AdminRoutineSummary[] }>(`/api/admin/routines?limit=${limit}`),
+
+  adminFactorsProbe: () =>
+    request<{
+      ok: boolean;
+      finnhub: ProbeStatus;
+      fred: ProbeStatus;
+      alpacaNews: ProbeStatus;
+      fmp: ProbeStatus;
+    }>("/api/admin/factors/probe", { method: "POST" }),
 
   adminKillRoutine: (id: string) =>
     request<{ ok: true; killed: 0 | 1; alreadyTerminal?: boolean }>(
