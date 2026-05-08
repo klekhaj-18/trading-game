@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { cn } from "../lib/utils";
 
 interface FaqItem {
@@ -9,6 +9,9 @@ interface FaqItem {
 }
 
 interface FaqSection {
+  id: string;
+  /** Short label for the sticky pill nav. */
+  pillLabel: string;
   title: string;
   blurb?: string;
   items: FaqItem[];
@@ -16,6 +19,8 @@ interface FaqSection {
 
 const SECTIONS: FaqSection[] = [
   {
+    id: "race",
+    pillLabel: "Race",
     title: "The race & how Claude trades",
     blurb: "What you're actually playing, and what Claude does on your behalf.",
     items: [
@@ -589,6 +594,8 @@ const SECTIONS: FaqSection[] = [
     ],
   },
   {
+    id: "privacy",
+    pillLabel: "Privacy",
     title: "Privacy",
     blurb: "What other players see, what stays hidden, and for how long.",
     items: [
@@ -685,6 +692,8 @@ const SECTIONS: FaqSection[] = [
     ],
   },
   {
+    id: "tech",
+    pillLabel: "Tech",
     title: "Tech under the hood",
     blurb: "For the curious. Skip if you're here to race.",
     items: [
@@ -788,6 +797,8 @@ const SECTIONS: FaqSection[] = [
     ],
   },
   {
+    id: "schema",
+    pillLabel: "Schema",
     title: "What's saved per routine",
     blurb:
       "Every routine writes one row to the routine_runs table. Here's what's in it and how to read it.",
@@ -955,6 +966,8 @@ const SECTIONS: FaqSection[] = [
     ],
   },
   {
+    id: "data",
+    pillLabel: "Data",
     title: "Where the data comes from",
     blurb:
       "Every routine is a function of two things: the playbook you wrote, and the market data Claude reads when it fires. Here's where each piece comes from.",
@@ -1084,6 +1097,8 @@ const SECTIONS: FaqSection[] = [
     ],
   },
   {
+    id: "friction",
+    pillLabel: "Friction",
     title: "FAQ — friction",
     blurb: "Things people actually run into.",
     items: [
@@ -1131,8 +1146,71 @@ const SECTIONS: FaqSection[] = [
 ];
 
 export function InfoPage() {
+  const [query, setQuery] = useState("");
+  const [activeId, setActiveId] = useState<string>(SECTIONS[0]!.id);
+  const trimmed = query.trim().toLowerCase();
+  const isSearching = trimmed.length > 0;
+
+  // Track which section is closest to the top of the viewport so the matching
+  // pill can be highlighted as the user scrolls. Disabled while searching
+  // because the section list is replaced with results.
+  useEffect(() => {
+    if (isSearching) return;
+    const els = SECTIONS
+      .map((s) => document.getElementById(`section-${s.id}`))
+      .filter((el): el is HTMLElement => el != null);
+    if (els.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length === 0) return;
+        const topmost = visible.reduce((a, b) =>
+          a.boundingClientRect.top < b.boundingClientRect.top ? a : b,
+        );
+        const id = topmost.target.id.replace(/^section-/, "");
+        setActiveId(id);
+      },
+      // The negative top margin pushes the trigger line below the sticky nav
+      // (~110px tall) so the pill flips when a section's heading actually
+      // crosses below the bar. -50% bottom = trigger only while the section
+      // is still in the upper half of the viewport.
+      { rootMargin: "-110px 0px -50% 0px", threshold: 0 },
+    );
+    els.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [isSearching]);
+
+  const matches = useMemo(() => {
+    if (!isSearching) return [] as { section: FaqSection; item: FaqItem }[];
+    const out: { section: FaqSection; item: FaqItem }[] = [];
+    for (const section of SECTIONS) {
+      for (const item of section.items) {
+        const hay = (
+          item.q +
+          " " +
+          nodeToText(item.a) +
+          " " +
+          (item.technical ? nodeToText(item.technical) : "")
+        ).toLowerCase();
+        if (hay.includes(trimmed)) out.push({ section, item });
+      }
+    }
+    return out;
+  }, [trimmed, isSearching]);
+
+  const handlePillClick = (id: string) => {
+    // Clicking a pill while a search is active clears the search so the user
+    // lands on the actual section content rather than a filtered subset.
+    if (isSearching) setQuery("");
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`section-${id}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActiveId(id);
+    });
+  };
+
   return (
-    <div className="space-y-10 max-w-3xl">
+    <div className="max-w-3xl">
       <header className="space-y-2">
         <div className="text-xs tracking-[0.3em] text-zinc-500 uppercase">Info</div>
         <h1 className="text-3xl font-black tracking-tight">How Trading Grand Prix works</h1>
@@ -1142,20 +1220,146 @@ export function InfoPage() {
         </p>
       </header>
 
-      {SECTIONS.map((section) => (
-        <SectionBlock key={section.title} section={section} />
-      ))}
+      <InfoNav
+        query={query}
+        onQueryChange={setQuery}
+        activeId={isSearching ? null : activeId}
+        onPillClick={handlePillClick}
+      />
 
-      <footer className="border-t border-[var(--color-race-border)] pt-6 text-xs text-zinc-500">
+      {isSearching ? (
+        <SearchResults
+          matches={matches}
+          query={query}
+          onClear={() => setQuery("")}
+        />
+      ) : (
+        <div className="space-y-10 mt-6">
+          {SECTIONS.map((section) => (
+            <SectionBlock key={section.id} section={section} />
+          ))}
+        </div>
+      )}
+
+      <footer className="border-t border-[var(--color-race-border)] pt-6 mt-10 text-xs text-zinc-500">
         Missing an answer? Tell Lekhaj — this page is meant to grow.
       </footer>
     </div>
   );
 }
 
+function InfoNav({
+  query,
+  onQueryChange,
+  activeId,
+  onPillClick,
+}: {
+  query: string;
+  onQueryChange: (q: string) => void;
+  activeId: string | null;
+  onPillClick: (id: string) => void;
+}) {
+  return (
+    <div className="sticky top-0 z-20 -mx-4 sm:-mx-2 px-4 sm:px-2 py-2 mt-4 bg-[var(--color-race-bg,#0a0a0a)]/95 backdrop-blur border-b border-[var(--color-race-border)]">
+      <div className="space-y-2">
+        <div className="relative">
+          <span
+            aria-hidden
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-zinc-500"
+          >
+            ⌕
+          </span>
+          <input
+            type="search"
+            placeholder="Search the FAQ…"
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            className="w-full rounded border border-zinc-800 bg-black/40 pl-8 pr-7 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-600 [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <button
+              onClick={() => onQueryChange("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded text-xs text-zinc-500 hover:text-zinc-200"
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        <nav
+          aria-label="FAQ sections"
+          className="flex items-center gap-1 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0"
+        >
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => onPillClick(s.id)}
+              className={cn(
+                "shrink-0 rounded px-2.5 py-1 text-[10px] uppercase tracking-wider whitespace-nowrap border transition",
+                activeId === s.id
+                  ? "border-amber-500/60 bg-amber-500/10 text-amber-200"
+                  : "border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700",
+              )}
+            >
+              {s.pillLabel}
+            </button>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+function SearchResults({
+  matches,
+  query,
+  onClear,
+}: {
+  matches: { section: FaqSection; item: FaqItem }[];
+  query: string;
+  onClear: () => void;
+}) {
+  if (matches.length === 0) {
+    return (
+      <div className="mt-6 rounded border border-dashed border-zinc-800 bg-black/30 p-8 text-center text-sm text-zinc-500">
+        No matches for "{query}".{" "}
+        <button onClick={onClear} className="ml-1 text-zinc-300 underline hover:text-white">
+          Clear
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-6 space-y-3">
+      <div className="text-xs text-zinc-500">
+        Showing {matches.length} match{matches.length === 1 ? "" : "es"} for "{query}"
+        <button
+          onClick={onClear}
+          className="ml-2 text-zinc-300 hover:text-white hover:underline"
+        >
+          [Clear]
+        </button>
+      </div>
+      {matches.map(({ section, item }, i) => (
+        <div key={`${section.id}-${i}`}>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 font-mono">
+            {section.pillLabel} ▸ {item.q}
+          </div>
+          <FaqEntry item={item} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SectionBlock({ section }: { section: FaqSection }) {
   return (
-    <section className="space-y-3">
+    <section
+      id={`section-${section.id}`}
+      // Sticky nav is ~110px tall; offset section anchors so the heading
+      // doesn't end up underneath the bar after a pill click.
+      className="space-y-3 scroll-mt-32"
+    >
       <div className="space-y-1">
         <h2 className="text-lg font-bold tracking-tight">{section.title}</h2>
         {section.blurb && <p className="text-xs text-zinc-500">{section.blurb}</p>}
@@ -1167,6 +1371,21 @@ function SectionBlock({ section }: { section: FaqSection }) {
       </div>
     </section>
   );
+}
+
+/**
+ * Walk a ReactNode tree and concatenate visible text. Used to build the
+ * search index across answer + technical bodies (which are JSX, not strings).
+ */
+function nodeToText(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeToText).join(" ");
+  if (typeof node === "object" && "props" in node) {
+    const props = (node as { props?: { children?: ReactNode } }).props;
+    return nodeToText(props?.children);
+  }
+  return "";
 }
 
 function Code({ children }: { children: ReactNode }) {
