@@ -12,6 +12,7 @@ import {
   type FinnhubProfile,
   type EarningsItem,
 } from "../lib/finnhub";
+import { fetchFmpEarningsBatch } from "../lib/fmp";
 import { fetchSeriesLatest, type FredObservation } from "../lib/fred";
 import {
   classifyHeadlinesBatch,
@@ -99,6 +100,7 @@ export interface ConnectivityResult {
   finnhub: ProviderStatus;
   fred: ProviderStatus;
   alpacaNews: ProviderStatus;
+  fmp: ProviderStatus;
 }
 
 export async function loadMacroSnapshot(env: Env): Promise<MacroSnapshot> {
@@ -141,7 +143,7 @@ export async function loadSymbolFactors(
   const includeTechnicals = options.includeTechnicals ?? true;
   const errors: string[] = [];
 
-  const [profileR, metricsR, earningsR, newsR, barsR] = await Promise.all([
+  const [profileR, metricsR, earningsR, fmpR, newsR, barsR] = await Promise.all([
     fetchProfile(env, sym).catch((err): { source: "disabled"; reason: string } => ({
       source: "disabled",
       reason: `profile error: ${err instanceof Error ? err.message : String(err)}`,
@@ -151,6 +153,7 @@ export async function loadSymbolFactors(
       reason: `metrics error: ${err instanceof Error ? err.message : String(err)}`,
     })),
     fetchNextEarnings(env, [sym]).catch(() => null),
+    fetchFmpEarningsBatch(env, [sym]).catch(() => null),
     includeNews
       ? fetchNews(creds, [sym], 30, 48).catch((): Record<string, AlpacaNewsItem[]> => ({}))
       : Promise.resolve({} as Record<string, AlpacaNewsItem[]>),
@@ -164,7 +167,35 @@ export async function loadSymbolFactors(
   const metrics = metricsR.source === "finnhub" ? metricsR.data : null;
   if (metricsR.source === "disabled") errors.push(metricsR.reason);
 
-  const earnings = earningsR?.bySymbol?.[sym] ?? null;
+  const finnEarnings = earningsR?.bySymbol?.[sym] ?? null;
+  const fmpEarnings = fmpR?.bySymbol?.[sym] ?? null;
+  // Merge: prefer Finnhub for the next-earnings date+hour (since it's the
+  // calendar source), and FMP for revenue actual/estimate (Finnhub free
+  // doesn't return them). Either may be null.
+  let earnings: EarningsItem | null = null;
+  if (finnEarnings && fmpEarnings) {
+    earnings = {
+      ...finnEarnings,
+      epsActual: finnEarnings.epsActual ?? fmpEarnings.epsActual,
+      epsEstimate: finnEarnings.epsEstimate ?? fmpEarnings.epsEstimate,
+      revActual: finnEarnings.revActual ?? fmpEarnings.revActual,
+      revEstimate: finnEarnings.revEstimate ?? fmpEarnings.revEstimate,
+    };
+  } else if (finnEarnings) {
+    earnings = finnEarnings;
+  } else if (fmpEarnings) {
+    earnings = {
+      symbol: sym,
+      date: fmpEarnings.date,
+      hour: "",
+      epsActual: fmpEarnings.epsActual,
+      epsEstimate: fmpEarnings.epsEstimate,
+      revActual: fmpEarnings.revActual,
+      revEstimate: fmpEarnings.revEstimate,
+      quarter: null,
+      year: null,
+    };
+  }
   const earningsHint = formatEarningsHint(earnings);
   const recentHeadlines = (newsR[sym] ?? []).slice(0, 10);
 
@@ -538,10 +569,11 @@ export async function runConnectivityProbe(env: Env, creds: AlpacaCreds): Promis
     (err): NewsAttempt => ({ ok: false, reason: err instanceof Error ? err.message : String(err) }),
   );
 
-  const [profile, vix, news] = await Promise.all([
+  const [profile, vix, news, fmpProbe] = await Promise.all([
     fetchProfile(env, "AAPL"),
     fetchSeriesLatest(env, MACRO_SERIES.vix),
     newsAttempt,
+    fetchFmpEarningsBatch(env, ["AAPL"]),
   ]);
 
   const finnhub: ProviderStatus = profile.source === "finnhub"
@@ -569,7 +601,25 @@ export async function runConnectivityProbe(env: Env, creds: AlpacaCreds): Promis
       }
     : { ok: false, source: "alpaca-news", reason: news.reason };
 
-  return { finnhub, fred, alpacaNews };
+  const fmpData = fmpProbe.bySymbol["AAPL"] ?? null;
+  const fmp: ProviderStatus = fmpProbe.source === "fmp" && fmpData != null
+    ? {
+        ok: true,
+        source: "fmp",
+        sample: {
+          symbol: fmpData.symbol,
+          date: fmpData.date,
+          epsActual: fmpData.epsActual,
+          epsEstimate: fmpData.epsEstimate,
+          revActual: fmpData.revActual,
+          revEstimate: fmpData.revEstimate,
+        },
+      }
+    : fmpProbe.source === "fmp"
+      ? { ok: false, source: "fmp", reason: "FMP returned no rows for AAPL" }
+      : { ok: false, source: "fmp", reason: fmpProbe.reason ?? "FMP_API_KEY not set" };
+
+  return { finnhub, fred, alpacaNews, fmp };
 }
 
 export type { FinnhubEconomicEvent };

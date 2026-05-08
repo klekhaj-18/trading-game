@@ -95,6 +95,7 @@ export const routineRuns = sqliteTable(
     scheduledSlot: text("scheduled_slot"),
     oneShotInstruction: text("one_shot_instruction"),
     marketSnapshotJson: text("market_snapshot_json"),
+    accountContextJson: text("account_context_json"),
     claudeModel: text("claude_model"),
     inputTokens: integer("input_tokens"),
     outputTokens: integer("output_tokens"),

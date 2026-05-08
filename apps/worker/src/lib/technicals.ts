@@ -18,6 +18,7 @@ export interface TechnicalsCard {
   fiftyTwoWeekLow: number | null;
   pctFromFiftyTwoWeekHigh: number | null;
   pctFromFiftyTwoWeekLow: number | null;
+  avgVolume30d: number | null;
   relativeVolume30d: number | null;
   barsAvailable: number;
 }
@@ -129,13 +130,17 @@ export function computeTechnicals(symbol: string, bars: AlpacaBar[]): Technicals
 
   // Relative volume: today's volume vs 30-day average (excluding today).
   let relativeVolume30d: number | null = null;
+  let avgVolume30d: number | null = null;
   if (sorted.length >= 31) {
     const tail = sorted.slice(-31);
     const todayVol = tail[tail.length - 1]!.v;
     const priorVols = tail.slice(0, 30).map((b) => b.v).filter((v) => v > 0);
-    if (priorVols.length === 30 && todayVol > 0) {
+    if (priorVols.length === 30) {
       const avg = priorVols.reduce((s, x) => s + x, 0) / priorVols.length;
-      if (avg > 0) relativeVolume30d = todayVol / avg;
+      if (avg > 0) {
+        avgVolume30d = avg;
+        if (todayVol > 0) relativeVolume30d = todayVol / avg;
+      }
     }
   }
 
@@ -160,6 +165,7 @@ export function computeTechnicals(symbol: string, bars: AlpacaBar[]): Technicals
     fiftyTwoWeekLow: round(fiftyTwoWeekLow, 4),
     pctFromFiftyTwoWeekHigh: round(pctFromFiftyTwoWeekHigh, 2),
     pctFromFiftyTwoWeekLow: round(pctFromFiftyTwoWeekLow, 2),
+    avgVolume30d: round(avgVolume30d, 0),
     relativeVolume30d: round(relativeVolume30d, 2),
     barsAvailable: sorted.length,
   };

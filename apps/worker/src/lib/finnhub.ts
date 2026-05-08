@@ -4,6 +4,10 @@ export interface EarningsItem {
   hour: "bmo" | "amc" | "dmh" | "";
   epsEstimate: number | null;
   epsActual: number | null;
+  // Revenue fields populated by the FMP enrichment step (lib/fmp.ts).
+  // Null when FMP_API_KEY is unset or FMP couldn't find the row.
+  revEstimate: number | null;
+  revActual: number | null;
   quarter: number | null;
   year: number | null;
 }
@@ -89,6 +93,8 @@ export async function fetchNextEarnings(
       hour: (item.hour as EarningsItem["hour"]) ?? "",
       epsEstimate: item.epsEstimate,
       epsActual: item.epsActual,
+      revEstimate: typeof item.revenueEstimate === "number" ? item.revenueEstimate : null,
+      revActual: typeof item.revenueActual === "number" ? item.revenueActual : null,
       quarter: item.quarter,
       year: item.year,
     };
