@@ -224,6 +224,12 @@ export const api = {
       body: JSON.stringify({ cron }),
     }),
 
+  adminTriggerCronSync: (cron: string) =>
+    request<{ ok: true; cron: string; durationMs: number }>(
+      "/api/admin/trigger-cron-sync",
+      { method: "POST", body: JSON.stringify({ cron }) },
+    ),
+
   adminRoster: () => request<RosterResponse>("/api/admin/roster"),
 
   adminResyncUserAlpaca: (userId: string) =>

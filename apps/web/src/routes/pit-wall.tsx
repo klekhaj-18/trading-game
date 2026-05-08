@@ -130,17 +130,7 @@ export function PitWallPage() {
         )}
       </div>
 
-      <div>
-        <div className="text-xs tracking-[0.25em] text-zinc-500 uppercase mb-3">Recent fills</div>
-        {fillsQ.isError ? (
-          <FetchErrorBanner
-            label="recent fills"
-            message={fillsQ.error instanceof Error ? fillsQ.error.message : "Couldn't load from Alpaca"}
-          />
-        ) : (
-          <RecentFillsTable fills={fillsQ.data?.fills ?? []} />
-        )}
-      </div>
+      <RecentFillsSection fillsQ={fillsQ} />
 
       <IntentsSection
         pending={intentsQ.data?.pending ?? []}
@@ -155,6 +145,46 @@ export function PitWallPage() {
         </div>
         <RoutineList runs={runsQ.data?.runs ?? []} />
       </div>
+    </div>
+  );
+}
+
+function RecentFillsSection({
+  fillsQ,
+}: {
+  fillsQ: { data?: { fills: RecentFillSummary[] }; isError: boolean; error: unknown };
+}) {
+  const [open, setOpen] = useState(false);
+  const fills = fillsQ.data?.fills ?? [];
+  const count = fills.length;
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="group flex w-full items-center gap-2 mb-3 text-left"
+      >
+        <span className="text-xs tracking-[0.25em] text-zinc-500 group-hover:text-zinc-300 uppercase">
+          Recent fills
+        </span>
+        <span className="text-[10px] text-zinc-500 tabular-digits rounded border border-zinc-800 px-1.5 py-0.5">
+          {fillsQ.isError ? "error" : count}
+        </span>
+        <span className="ml-auto text-[10px] text-zinc-500 group-hover:text-zinc-300 uppercase tracking-wider">
+          {open ? "Hide" : "Show"} {open ? "▲" : "▼"}
+        </span>
+      </button>
+      {open && (
+        fillsQ.isError ? (
+          <FetchErrorBanner
+            label="recent fills"
+            message={fillsQ.error instanceof Error ? fillsQ.error.message : "Couldn't load from Alpaca"}
+          />
+        ) : (
+          <RecentFillsTable fills={fills} />
+        )
+      )}
     </div>
   );
 }
