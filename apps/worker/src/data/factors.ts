@@ -12,7 +12,7 @@ import {
   type FinnhubProfile,
   type EarningsItem,
 } from "../lib/finnhub";
-import { fetchFmpEarningsBatch } from "../lib/fmp";
+import { fetchFmpEarningsBatch, probeFmp } from "../lib/fmp";
 import { fetchSeriesLatest, type FredObservation } from "../lib/fred";
 import {
   classifyHeadlinesBatch,
@@ -569,11 +569,11 @@ export async function runConnectivityProbe(env: Env, creds: AlpacaCreds): Promis
     (err): NewsAttempt => ({ ok: false, reason: err instanceof Error ? err.message : String(err) }),
   );
 
-  const [profile, vix, news, fmpProbe] = await Promise.all([
+  const [profile, vix, news, fmpProbeResult] = await Promise.all([
     fetchProfile(env, "AAPL"),
     fetchSeriesLatest(env, MACRO_SERIES.vix),
     newsAttempt,
-    fetchFmpEarningsBatch(env, ["AAPL"]),
+    probeFmp(env, "AAPL"),
   ]);
 
   const finnhub: ProviderStatus = profile.source === "finnhub"
@@ -601,23 +601,20 @@ export async function runConnectivityProbe(env: Env, creds: AlpacaCreds): Promis
       }
     : { ok: false, source: "alpaca-news", reason: news.reason };
 
-  const fmpData = fmpProbe.bySymbol["AAPL"] ?? null;
-  const fmp: ProviderStatus = fmpProbe.source === "fmp" && fmpData != null
+  const fmp: ProviderStatus = fmpProbeResult.ok
     ? {
         ok: true,
         source: "fmp",
         sample: {
-          symbol: fmpData.symbol,
-          date: fmpData.date,
-          epsActual: fmpData.epsActual,
-          epsEstimate: fmpData.epsEstimate,
-          revActual: fmpData.revActual,
-          revEstimate: fmpData.revEstimate,
+          symbol: fmpProbeResult.data.symbol,
+          date: fmpProbeResult.data.date,
+          epsActual: fmpProbeResult.data.epsActual,
+          epsEstimate: fmpProbeResult.data.epsEstimate,
+          revActual: fmpProbeResult.data.revActual,
+          revEstimate: fmpProbeResult.data.revEstimate,
         },
       }
-    : fmpProbe.source === "fmp"
-      ? { ok: false, source: "fmp", reason: "FMP returned no rows for AAPL" }
-      : { ok: false, source: "fmp", reason: fmpProbe.reason ?? "FMP_API_KEY not set" };
+    : { ok: false, source: "fmp", reason: fmpProbeResult.reason };
 
   return { finnhub, fred, alpacaNews, fmp };
 }
