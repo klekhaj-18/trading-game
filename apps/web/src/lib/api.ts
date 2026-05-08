@@ -112,9 +112,20 @@ export interface RoutineRunSummary {
   completedAt: number | null;
 }
 
-export interface AdminRoutineRow extends RoutineRunSummary {
+/**
+ * Slim cross-user row for the admin routines list. Intentionally omits the
+ * decision/reasoning/order/token detail — admin is also a player, so per-row
+ * content would leak competitor strategy. Owners get the rich view on Pit Wall.
+ */
+export interface AdminRoutineSummary {
+  id: string;
   userId: string;
   displayName: string;
+  kind: RoutineKind;
+  scheduledSlot: ScheduledTouchpoint | null;
+  status: RoutineStatus;
+  startedAt: number;
+  completedAt: number | null;
 }
 
 export class ApiError extends Error {
@@ -204,7 +215,7 @@ export const api = {
     }),
 
   adminListRoutines: (limit = 50) =>
-    request<{ runs: AdminRoutineRow[] }>(`/api/admin/routines?limit=${limit}`),
+    request<{ runs: AdminRoutineSummary[] }>(`/api/admin/routines?limit=${limit}`),
 
   adminKillRoutine: (id: string) =>
     request<{ ok: true; killed: 0 | 1; alreadyTerminal?: boolean }>(

@@ -82,23 +82,32 @@ adminRoutes.get("/roster", async (c) => {
   return c.json({ players, maxPlayers: 4 as const });
 });
 
+// Cross-user routines list. Returns metadata only — no decisions, reasoning,
+// orders, instructions, errorText, model, or token counts. The admin is also
+// a player, so leaking per-row content would give them a competitive view of
+// every other player's strategy. Owners see the rich view on Pit Wall.
 adminRoutes.get("/routines", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 200);
   const db = getDb(c.env.DB);
   const rows = await db
     .select({
-      run: routineRuns,
+      id: routineRuns.id,
+      userId: routineRuns.userId,
       displayName: users.displayName,
+      kind: routineRuns.kind,
+      scheduledSlot: routineRuns.scheduledSlot,
+      status: routineRuns.status,
+      startedAt: routineRuns.startedAt,
+      completedAt: routineRuns.completedAt,
     })
     .from(routineRuns)
     .leftJoin(users, eq(users.id, routineRuns.userId))
     .orderBy(desc(routineRuns.startedAt))
     .limit(limit);
   return c.json({
-    runs: rows.map(({ run, displayName }) => ({
-      ...serializeRun(run),
-      userId: run.userId,
-      displayName: displayName ?? "(unknown)",
+    runs: rows.map((r) => ({
+      ...r,
+      displayName: r.displayName ?? "(unknown)",
     })),
   });
 });
