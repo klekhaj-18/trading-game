@@ -55,6 +55,19 @@ export interface PositionSummary {
   side: "long" | "short";
 }
 
+export interface RecentFillSummary {
+  id: string;
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+  filledQty: number;
+  filledAvgPrice: number | null;
+  orderType: string;
+  status: string;
+  submittedAt: number;
+  filledAt: number | null;
+}
+
 export interface EquityPoint {
   t: number;
   equity: number;
@@ -251,6 +264,9 @@ export const api = {
   mePositions: () => request<{ positions: PositionSummary[]; error?: string }>("/api/me/positions"),
 
   meOpenOrders: () => request<{ orders: OpenOrderSummary[]; error?: string }>("/api/me/open-orders"),
+
+  meRecentFills: () =>
+    request<{ fills: RecentFillSummary[]; error?: string }>("/api/me/recent-fills"),
 
   meDirectOrder: (input: {
     symbol: string;

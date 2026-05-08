@@ -23,6 +23,7 @@ import {
   cancelAndReplaceOrder,
   cancelOrder,
   closePosition,
+  fetchClosedOrders,
   fetchOpenOrders,
   fetchPositions,
   placeOrder,
@@ -329,6 +330,64 @@ meRoutes.get("/open-orders", async (c) => {
     return c.json(
       {
         error: "open_orders_fetch_failed",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      502,
+    );
+  }
+});
+
+meRoutes.get("/recent-fills", async (c) => {
+  const user = c.get("user");
+  const cacheKey = `recent-fills:${user.id}`;
+  const cached = await c.env.CACHE.get(cacheKey);
+  if (cached) return c.json(JSON.parse(cached));
+
+  const db = getDb(c.env.DB);
+  const [userRow] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+  if (
+    !userRow?.alpacaKeyCiphertext ||
+    !userRow?.alpacaKeyIv ||
+    !userRow?.alpacaSecretCiphertext ||
+    !userRow?.alpacaSecretIv
+  ) {
+    return c.json({ fills: [] });
+  }
+  const apiKey = await open(
+    { ciphertext: userRow.alpacaKeyCiphertext, iv: userRow.alpacaKeyIv },
+    c.env.ALPACA_KEY_ENCRYPTION_KEY,
+  );
+  const apiSecret = await open(
+    { ciphertext: userRow.alpacaSecretCiphertext, iv: userRow.alpacaSecretIv },
+    c.env.ALPACA_KEY_ENCRYPTION_KEY,
+  );
+  const creds: AlpacaCreds = { apiKey, apiSecret };
+  try {
+    const orders = await fetchClosedOrders(creds, 20);
+    const payload = {
+      fills: orders.map((o) => ({
+        id: o.id,
+        symbol: o.symbol,
+        side: o.side,
+        qty: Number(o.qty),
+        filledQty: o.filled_qty ? Number(o.filled_qty) : 0,
+        filledAvgPrice: o.filled_avg_price != null ? Number(o.filled_avg_price) : null,
+        orderType: o.order_type,
+        status: o.status,
+        submittedAt: Math.floor(new Date(o.submitted_at).getTime() / 1000),
+        filledAt: o.filled_at ? Math.floor(new Date(o.filled_at).getTime() / 1000) : null,
+      })),
+    };
+    await c.env.CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 60 });
+    return c.json(payload);
+  } catch (err) {
+    console.error("recent-fills error", err);
+    if (err instanceof AlpacaAuthError) {
+      return c.json({ error: "alpaca_auth_failed" }, 401);
+    }
+    return c.json(
+      {
+        error: "recent_fills_fetch_failed",
         message: err instanceof Error ? err.message : String(err),
       },
       502,
