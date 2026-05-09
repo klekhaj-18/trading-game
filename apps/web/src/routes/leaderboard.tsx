@@ -293,24 +293,67 @@ function Ticker({ events }: { events: PublicTickerEvent[] }) {
 }
 
 function nextRoutineLabel(nowSec: number): string {
-  const d = new Date();
-  const etHour = (d.getUTCHours() - 4 + 24) % 24;
-  const etMin = d.getUTCMinutes();
+  // Read ET day-of-week + time-of-day via Intl so DST is handled correctly
+  // (the previous hardcoded UTC-4 was wrong for EST). Trading-slot crons are
+  // gated to MON-FRI in wrangler.toml, so we walk forward day-by-day and
+  // skip weekends when picking the next fire. Warm slot fires daily but is
+  // intentionally not surfaced — players care about trading routines.
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date());
+  const weekday = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  // 0 = Sun, 1 = Mon, ..., 6 = Sat.
+  const DOW: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+  const today = DOW[weekday] ?? 1;
+  const nowMins = hour * 60 + minute;
   const slotEntries = Object.entries(SLOT_HOUR_ET) as [RoutineSlot, [number, number]][];
-  const futureSameDay = slotEntries
-    .map(([slot, [h, m]]) => ({ slot, h, m, mins: h * 60 + m }))
-    .filter((s) => s.mins > etHour * 60 + etMin)
-    .sort((a, b) => a.mins - b.mins);
-  const next = futureSameDay[0] ?? { slot: "premarket" as RoutineSlot, h: 9, m: 15, mins: 9 * 60 + 15 };
-  const nowMins = etHour * 60 + etMin;
-  let deltaMins = next.mins - nowMins;
-  if (deltaMins <= 0) deltaMins += 24 * 60;
-  const hh = Math.floor(deltaMins / 60);
-  const mm = deltaMins % 60;
-  const countdown = hh > 0 ? `${hh}h ${mm.toString().padStart(2, "0")}m` : `${mm}m`;
-  // Silence unused-var warning when nowSec changes trigger re-render.
-  void nowSec;
-  return `${SLOT_LABEL[next.slot]} in ${countdown}`;
+
+  let best: { slot: RoutineSlot; deltaMins: number } | null = null;
+  for (let dayOffset = 0; dayOffset < 8; dayOffset++) {
+    const dow = (today + dayOffset) % 7;
+    if (dow === 0 || dow === 6) continue; // skip Sun/Sat — trading slots are MON-FRI
+    for (const [slot, [h, m]] of slotEntries) {
+      const fireFromNow = dayOffset * 24 * 60 + h * 60 + m - nowMins;
+      if (fireFromNow <= 0) continue;
+      if (best == null || fireFromNow < best.deltaMins) {
+        best = { slot, deltaMins: fireFromNow };
+      }
+    }
+    // Once we've found any candidate on day N, the earliest on N is by
+    // construction earlier than any fire on day N+1 — stop walking.
+    if (best) break;
+  }
+
+  void nowSec; // re-render trigger; actual time read is from `new Date()` above
+  if (!best) return "Pre-market in 24h";
+  return `${SLOT_LABEL[best.slot]} in ${formatCountdown(best.deltaMins)}`;
+}
+
+function formatCountdown(mins: number): string {
+  if (mins >= 24 * 60) {
+    const days = Math.floor(mins / (24 * 60));
+    const remMins = mins % (24 * 60);
+    const hh = Math.floor(remMins / 60);
+    return hh > 0 ? `${days}d ${hh}h` : `${days}d`;
+  }
+  const hh = Math.floor(mins / 60);
+  const mm = mins % 60;
+  return hh > 0 ? `${hh}h ${mm.toString().padStart(2, "0")}m` : `${mm}m`;
 }
 
 function formatRelative(deltaSec: number): string {
